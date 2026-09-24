@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Modules\Portfolio\Rafael.Portfolio.Modules.Portfolio\Rafael.Portfolio.Modules.Portfolio.csproj" />
+    <ProjectReference Include="..\..\..\Modules\Knowledge\Rafael.Portfolio.Modules.Knowledge\Rafael.Portfolio.Modules.Knowledge.csproj" />
+    <ProjectReference Include="..\..\..\Modules\Assistant\Rafael.Portfolio.Modules.Assistant\Rafael.Portfolio.Modules.Assistant.csproj" />
+    <ProjectReference Include="..\..\..\Modules\JobMatching\Rafael.Portfolio.Modules.JobMatching\Rafael.Portfolio.Modules.JobMatching.csproj" />
+    <ProjectReference Include="..\..\..\Modules\Contact\Rafael.Portfolio.Modules.Contact\Rafael.Portfolio.Modules.Contact.csproj" />
+  </ItemGroup>
+
+</Project>
