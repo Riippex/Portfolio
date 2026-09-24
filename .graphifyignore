@@ -1,0 +1,47 @@
+# Agent instructions and local assistant state
+**/AGENTS.md
+**/AGENTS.local.md
+**/CLAUDE.md
+**/CLAUDE.local.md
+**/GEMINI.local.md
+.agents/
+.claude/
+.codex/
+.gemini/
+
+# Private material and secrets
+documents/
+.env
+.env.*
+secrets/
+**/secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*service-account*.json
+
+# Local graph state and generated output
+.codegraph/
+.gitnexus/
+graphify-out/
+
+# Dependencies and build output
+node_modules/
+.next/
+.wrangler/
+bin/
+obj/
+dist/
+build/
+coverage/
+package-lock.json
+
+# Binary visual assets are not architecture evidence
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.ico
+*.svg
