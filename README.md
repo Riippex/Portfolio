@@ -58,5 +58,16 @@ pwsh tools/sync-agent-skills.ps1
 pwsh tools/sync-agent-skills.ps1 -Check
 ```
 
+For cross-file navigation and impact analysis, initialize the optional local
+graph indexes from the repository root:
+
+```powershell
+codegraph init
+gitnexus analyze --index-only --skip-agents-md
+```
+
+Use [graph tool routing](docs/runbooks/graph-tools.md) to select the right tool
+and keep private material out of generated indexes and audits.
+
 Delivery and branch rules are documented in
 [docs/runbooks/pull-requests.md](docs/runbooks/pull-requests.md).

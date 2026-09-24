@@ -5,6 +5,7 @@ Canonical skills live in `.agents/skills/`. Byte-identical copies under `.claude
 | Skill | Use when |
 |---|---|
 | `portfolio-architecture` | Module, API, evidence ownership, data, runtime, or deployment boundaries change |
+| `portfolio-graph-tools` | Cross-file navigation, diff impact, or documentation-to-code audits |
 | `portfolio-product-slice` | Implementing one user-visible behavior across frontend, backend, contracts, or persistence |
 | `portfolio-ai-safety` | Reviewing or changing chat, RAG, prompts, tools, job matching, memory, or model output handling |
 | `portfolio-cloud-review` | Cloudflare/GCP infrastructure, IAM, deployment, observability, or cost changes |
