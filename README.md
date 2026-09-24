@@ -44,3 +44,19 @@ dotnet test
 ```
 
 See [docs/architecture.md](docs/architecture.md) for module boundaries and the evidence policy.
+
+## AI-assisted development
+
+Repository-wide agent rules live in [AGENTS.md](AGENTS.md). Project skills are
+versioned under `.agents/skills/`, mirrored for Claude under `.claude/skills/`,
+and routed by [docs/runbooks/agent-skills.md](docs/runbooks/agent-skills.md).
+
+After editing a canonical skill:
+
+```powershell
+pwsh tools/sync-agent-skills.ps1
+pwsh tools/sync-agent-skills.ps1 -Check
+```
+
+Delivery and branch rules are documented in
+[docs/runbooks/pull-requests.md](docs/runbooks/pull-requests.md).

@@ -41,3 +41,22 @@ Thumbs.db
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# private planning and local AI-assistant state
+/documents/
+/AGENTS.local.md
+/CLAUDE.local.md
+/GEMINI.local.md
+/.agents/*
+!/.agents/skills/
+!/.agents/skills/**
+/.claude/*
+!/.claude/skills/
+!/.claude/skills/**
+/.codex/
+/.gemini/
+
+# local code-graph indexes and generated audits
+.codegraph/
+.gitnexus/
+graphify-out/
