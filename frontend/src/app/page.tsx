@@ -44,10 +44,10 @@ export default function Home() {
         </div>
         <div className="project-grid">
           {selectedProjects.map((project, index) => (
-            <article className="project-card" key={project.name}>
+            <article className="project-card" key={project.slug}>
               <div className="project-number">0{index + 1}</div>
               <div>
-                <span className="project-state">Evidence connecting</span>
+                <span className="project-state">Evidence {project.evidenceStatus}</span>
                 <h3>{project.name}</h3>
                 <p>{project.description}</p>
               </div>

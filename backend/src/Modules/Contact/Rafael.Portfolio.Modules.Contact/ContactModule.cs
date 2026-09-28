@@ -1,6 +1,12 @@
+using Rafael.Portfolio.BuildingBlocks;
+
 namespace Rafael.Portfolio.Modules.Contact;
 
-public static class ContactModule
+public sealed class ContactModule : IModule
 {
-    public const string Name = "Contact";
+    private ContactModule()
+    {
+    }
+
+    public static string Name => "Contact";
 }

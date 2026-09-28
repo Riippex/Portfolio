@@ -1,6 +1,12 @@
+using Rafael.Portfolio.BuildingBlocks;
+
 namespace Rafael.Portfolio.Modules.JobMatching;
 
-public static class JobMatchingModule
+public sealed class JobMatchingModule : IModule
 {
-    public const string Name = "JobMatching";
+    private JobMatchingModule()
+    {
+    }
+
+    public static string Name => "JobMatching";
 }

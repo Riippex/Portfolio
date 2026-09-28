@@ -1,6 +1,12 @@
+using Rafael.Portfolio.BuildingBlocks;
+
 namespace Rafael.Portfolio.Modules.Assistant;
 
-public static class AssistantModule
+public sealed class AssistantModule : IModule
 {
-    public const string Name = "Assistant";
+    private AssistantModule()
+    {
+    }
+
+    public static string Name => "Assistant";
 }

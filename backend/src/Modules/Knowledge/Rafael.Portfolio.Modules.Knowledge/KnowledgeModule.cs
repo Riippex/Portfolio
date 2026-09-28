@@ -1,6 +1,12 @@
+using Rafael.Portfolio.BuildingBlocks;
+
 namespace Rafael.Portfolio.Modules.Knowledge;
 
-public static class KnowledgeModule
+public sealed class KnowledgeModule : IModule
 {
-    public const string Name = "Knowledge";
+    private KnowledgeModule()
+    {
+    }
+
+    public static string Name => "Knowledge";
 }

@@ -44,6 +44,7 @@ dotnet test
 ```
 
 See [docs/architecture.md](docs/architecture.md) for module boundaries and the evidence policy.
+Repository conventions are defined in [docs/conventions.md](docs/conventions.md).
 
 ## AI-assisted development
 
@@ -71,3 +72,6 @@ and keep private material out of generated indexes and audits.
 
 Delivery and branch rules are documented in
 [docs/runbooks/pull-requests.md](docs/runbooks/pull-requests.md).
+The multi-model implementation and review loop is documented in
+[docs/runbooks/ai-development.md](docs/runbooks/ai-development.md).
+Gemini reads the shared repository rules through the small compatibility entry points in `GEMINI.md` and `frontend/GEMINI.md`.
