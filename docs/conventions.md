@@ -34,6 +34,16 @@ These rules keep generated changes small enough to review and correct.
 - Keep server/provider credentials and backend persistence out of the frontend.
 - Create shared code only when two real consumers exist.
 
+## Infrastructure as code
+
+- Coding models may author Terraform and deployment definitions when the task
+  names the environment, provider boundary, allowed paths, and acceptance checks.
+- Keep environments, identities, remote state, secrets, and provider versions
+  explicit; never embed credentials or secret values.
+- Treat generated plans as review input, not permission to apply them.
+- Only the human owner and Codex run commands that access provider state or
+  credentials, and only with explicit authorization.
+
 ## Change size
 
 A generated task should normally change one behavior, its tests, and its

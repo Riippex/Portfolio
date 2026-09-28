@@ -6,7 +6,8 @@ roles organize work; they do not grant extra permissions.
 ## Roles
 
 1. **Human owner:** chooses the product slice, evidence, priorities, and any
-   architecture or deployment decision.
+   architecture or deployment decision. The owner and Codex operate the local
+   or cloud console; provider access always remains under owner authorization.
 2. **Gemini — implementer:** reads `AGENTS.md`, architecture, conventions, the
    affected contract, and nested instructions. It implements one bounded slice,
    adds proportional tests, and reports the exact checks it ran.
@@ -20,6 +21,19 @@ roles organize work; they do not grant extra permissions.
 5. **Codex — verification:** reruns affected checks and confirms whether the
    finding is resolved. A correction claim without a passing check remains
    unverified.
+
+## Infrastructure workflow
+
+Gemini, Kimi, and Claude may generate or correct Terraform and related
+deployment definitions within an explicitly bounded task. Infrastructure code
+receives the same review, testing, and correction loop as application code.
+
+Codex reviews provider boundaries, IAM, state handling, security, cost, and the
+resulting plan with the human owner. Commands that access provider state or
+credentials, plus `apply`, deployment, DNS, billing, and secret operations, are
+performed only through the owner-and-Codex console workflow with explicit
+authorization. Generated infrastructure is proposed code; it is not evidence
+that a resource exists or that a deployment succeeded.
 
 ## Task brief
 
