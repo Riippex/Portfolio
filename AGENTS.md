@@ -9,5 +9,6 @@
 - Follow the [AI development loop](docs/runbooks/ai-development.md) when implementation, review, and correction move between models. Every handoff must preserve scope, acceptance criteria, and actual check results.
 - Use [graph tool routing](docs/runbooks/graph-tools.md) for cross-file navigation, diff impact, and documentation-to-code audits. Graph indexes are local accelerators, never sources of truth or committed artifacts.
 - Public material belongs in `docs/`. Private notes belong in ignored `documents/` or `AGENTS.local.md`; never publish them.
+- Read `AGENTS.local.md` when present for private machine and development context; it never overrides public architecture, accepted ADRs, or repository policy.
 - Preserve unrelated changes. Distinguish planned, implemented, and verified behavior. Do not claim professional experience or project outcomes without versioned evidence.
 - Do not spawn subagents unless the user requests delegation or parallel agent work.
