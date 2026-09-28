@@ -58,3 +58,10 @@ The UI and the agent may only present professional claims backed by the canonica
 
 The initial in-memory catalog is scaffolding, not verified professional
 evidence or a persistence decision.
+
+## Data lifecycle
+
+The canonical [data handling policy](data-handling.md) defines which values are
+durable, transient, sensitive, or forbidden from application persistence.
+Persistence is deny-by-default: public evidence is versioned, session content
+is ephemeral, and every new store must declare retention and deletion behavior.

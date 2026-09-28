@@ -12,6 +12,8 @@ These rules keep generated changes small enough to review and correct.
   been reviewed.
 - Keep public claims tied to versioned evidence. Use `pending` when evidence is
   not connected.
+- Classify every new stored, cached, indexed, emitted, or logged field under the
+  [data handling policy](data-handling.md) before implementing persistence.
 
 ## Backend
 

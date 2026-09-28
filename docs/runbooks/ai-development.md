@@ -42,6 +42,7 @@ Every implementation or correction handoff must include:
 - user-visible behavior and owning module;
 - allowed paths and explicit out-of-scope work;
 - dependency direction and trust boundary;
+- data classification, retention, deletion, and logging behavior;
 - acceptance criteria and commands to run;
 - relevant contracts, evidence, and known gaps;
 - current branch and whether commit, push, PR, or deployment is authorized.

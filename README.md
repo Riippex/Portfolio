@@ -45,6 +45,7 @@ dotnet test
 
 See [docs/architecture.md](docs/architecture.md) for module boundaries and the evidence policy.
 Repository conventions are defined in [docs/conventions.md](docs/conventions.md).
+Persistence and retention defaults are defined in [docs/data-handling.md](docs/data-handling.md).
 
 ## AI-assisted development
 
