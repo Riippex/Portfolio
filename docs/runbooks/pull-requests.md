@@ -6,6 +6,15 @@
 
 `main` is the release boundary. Updating `main`, merging or promoting `develop` into it, and publishing a release or deployment require explicit owner authorization.
 
+## Agent commit boundary
+
+For an authorized roadmap item, Gemini may create one focused commit after the
+item acceptance checks pass. After Codex freezes and reviews that commit, either
+Kimi or Claude may create one focused follow-up commit for the assigned
+correction block. Do not amend or rewrite earlier handoff commits. These commit
+permissions never imply permission to push, open or change a pull request,
+deploy, apply infrastructure, or update `main`.
+
 ## Required close-out
 
 1. Inspect the working tree before and after the task; preserve unrelated changes.

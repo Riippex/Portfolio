@@ -10,17 +10,36 @@ roles organize work; they do not grant extra permissions.
    or cloud console; provider access always remains under owner authorization.
 2. **Gemini — implementer:** reads `AGENTS.md`, architecture, conventions, the
    affected contract, and nested instructions. It implements one bounded slice,
-   adds proportional tests, and reports the exact checks it ran.
+   adds proportional tests, runs the required checks, and creates one focused
+   Conventional Commit when the roadmap item is complete.
 3. **Codex — reviewer and integrator:** inspects the diff and source, checks
-   boundaries, evidence, security, tests, and generated files, then either
-   accepts the slice or produces concrete findings. It performs final validation
-   and delivery only when authorized.
-4. **Kimi or Claude — corrector:** receives the failing check or review finding,
-   reproduces it, and makes the smallest correction. Choose one according to
-   available tokens; do not run both on the same correction by default.
+   the frozen implementation commit, boundaries, evidence, security, tests, and
+   generated files, then either accepts the block or produces concrete findings.
+   It performs final validation and delivery only when authorized.
+4. **Kimi or Claude — corrector:** receives one bounded block of reproduced
+   findings, makes the smallest corrections, runs the required checks, and
+   creates one focused follow-up commit. Choose one according to available
+   tokens; do not run both on the same correction block by default.
 5. **Codex — verification:** reruns affected checks and confirms whether the
    finding is resolved. A correction claim without a passing check remains
    unverified.
+
+## Commit and review blocks
+
+Before implementation, record the item base commit. A completed Gemini item is
+one reviewable commit on `develop`; it is not amended after handoff. Codex
+freezes the base, head, paths, checks, limitations, and working-tree state, then
+reviews only that block.
+
+If findings require correction, assign the bounded finding set to either Kimi
+or Claude. The corrector adds one follow-up commit without rewriting Gemini's
+commit. Codex reviews that correction commit and verifies the complete range
+from the original base through the correction head. Further correction rounds
+repeat the same pattern, preserving commit history.
+
+Implementation and correction agents may commit an authorized roadmap item,
+but they never push, open or mutate pull requests, deploy, apply infrastructure,
+or update `main` unless the owner explicitly authorizes that separate action.
 
 ## Infrastructure workflow
 
@@ -46,6 +65,7 @@ Every implementation or correction handoff must include:
 - acceptance criteria and commands to run;
 - relevant contracts, evidence, and known gaps;
 - current branch and whether commit, push, PR, or deployment is authorized.
+- base commit and expected commit boundary for the handoff.
 
 ## Output contract
 
