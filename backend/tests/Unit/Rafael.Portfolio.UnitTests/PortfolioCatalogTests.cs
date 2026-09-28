@@ -21,4 +21,16 @@ public sealed class PortfolioCatalogTests
 
         Assert.All(catalog.GetProjects(), project => Assert.Equal("pending", project.EvidenceStatus));
     }
+
+    [Fact]
+    public void Projects_expose_non_empty_summary_and_name()
+    {
+        var catalog = new InMemoryPortfolioCatalog();
+
+        Assert.All(catalog.GetProjects(), project =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(project.Name));
+            Assert.False(string.IsNullOrWhiteSpace(project.Summary));
+        });
+    }
 }

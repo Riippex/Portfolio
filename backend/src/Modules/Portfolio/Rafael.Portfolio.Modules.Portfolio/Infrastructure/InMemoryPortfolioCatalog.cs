@@ -13,9 +13,9 @@ public sealed class InMemoryPortfolioCatalog : IPortfolioCatalog
 
     private static readonly ProjectSummary[] Projects =
     [
-        new("vextis", "Vextis", "pending"),
-        new("kinetiq-v", "Kinetiq V", "pending"),
-        new("jobty", "JobTY", "pending")
+        new("vextis", "Vextis", "Verified architecture and outcomes will be published here.", "pending"),
+        new("kinetiq-v", "Kinetiq V", "Verified architecture and outcomes will be published here.", "pending"),
+        new("jobty", "JobTY", "Verified architecture and outcomes will be published here.", "pending")
     ];
 
     public Profile GetProfile() => Profile;
