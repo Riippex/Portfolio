@@ -11,7 +11,8 @@ roles organize work; they do not grant extra permissions.
 2. **Gemini — implementer:** reads `AGENTS.md`, architecture, conventions, the
    affected contract, and nested instructions. It implements one bounded slice,
    adds proportional tests, runs the required checks, and creates one focused
-   Conventional Commit when the roadmap item is complete.
+   Conventional Commit when the roadmap item is complete. After pushing, it
+   marks only that item `Review` and records its review checkpoint.
 3. **Codex — reviewer and integrator:** inspects the diff and source, checks
    the frozen implementation commit, boundaries, evidence, security, tests, and
    generated files, then either accepts the block or produces concrete findings.
@@ -27,9 +28,10 @@ roles organize work; they do not grant extra permissions.
 ## Commit and review blocks
 
 Before implementation, record the item base commit. A completed Gemini item is
-one reviewable commit on `develop`; it is not amended after handoff. Codex
-freezes the base, head, paths, checks, limitations, and working-tree state, then
-reviews only that block.
+one reviewable commit on `develop`; it is not amended after handoff. After the
+push, Gemini freezes the base, head, included commits, changed paths, reported
+checks, limitations, and working-tree state in the private review queue. Codex
+confirms the checkpoint and reviews only that block.
 
 If findings require correction, assign the bounded finding set to either Kimi
 or Claude. The corrector adds one follow-up commit without rewriting Gemini's
@@ -79,6 +81,11 @@ Each model reports:
 - checks actually run and their results;
 - assumptions, risks, and unresolved decisions;
 - no claim of deployment, verification, or evidence without proof.
+
+An implementation or correction agent also records the review status, base,
+head, included commits, changed paths, actual check results, known limitations,
+and dirty-tree state. It may update the status of its assigned item, but it may
+not reprioritize or unblock another roadmap item.
 
 Review findings should identify a file and concrete failure mode. Correction
 prompts should contain only the relevant finding, evidence, allowed scope, and
