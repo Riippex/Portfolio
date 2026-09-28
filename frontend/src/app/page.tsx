@@ -1,5 +1,6 @@
 import { AssistantPreview } from "@/modules/assistant/components/assistant-preview";
 import { getProfile, getSelectedProjects } from "@/modules/portfolio/api";
+import Link from "next/link";
 
 export default async function Home() {
   const [profileResult, projectsResult] = await Promise.all([
@@ -64,7 +65,12 @@ export default async function Home() {
         <div className="project-grid">
           {projects && projects.length > 0 ? (
             projects.map((project, index) => (
-              <article className="project-card" key={project.slug}>
+              <Link
+                href={`/projects/${project.slug}`}
+                className="project-card"
+                key={project.slug}
+                aria-label={`View evidence-backed case study for ${project.name}`}
+              >
                 <div className="project-number">0{index + 1}</div>
                 <div>
                   <span className="project-state">Evidence {project.evidenceStatus}</span>
@@ -72,7 +78,7 @@ export default async function Home() {
                   <p>{project.summary}</p>
                 </div>
                 <span className="project-arrow" aria-hidden="true">↗</span>
-              </article>
+              </Link>
             ))
           ) : (
             <div className="status-banner" role="status" aria-live="polite">

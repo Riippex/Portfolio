@@ -33,4 +33,29 @@ public sealed class PortfolioCatalogTests
             Assert.False(string.IsNullOrWhiteSpace(project.Summary));
         });
     }
+
+    [Theory]
+    [InlineData("vextis")]
+    [InlineData("kinetiq-v")]
+    [InlineData("jobty")]
+    public void GetProjectBySlug_returns_detail_for_known_slugs(string slug)
+    {
+        var catalog = new InMemoryPortfolioCatalog();
+        var project = catalog.GetProjectBySlug(slug);
+
+        Assert.NotNull(project);
+        Assert.Equal(slug, project.Slug);
+        Assert.Equal("pending", project.EvidenceStatus);
+        Assert.NotEmpty(project.Claims);
+        Assert.All(project.Claims, claim => Assert.Equal("pending", claim.Status));
+    }
+
+    [Fact]
+    public void GetProjectBySlug_returns_null_for_unknown_slug()
+    {
+        var catalog = new InMemoryPortfolioCatalog();
+        var project = catalog.GetProjectBySlug("unknown-project");
+
+        Assert.Null(project);
+    }
 }

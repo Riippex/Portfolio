@@ -1,4 +1,4 @@
-import type { Profile, SelectedProject } from "./model";
+import type { Profile, ProjectClaim, ProjectDetail, SelectedProject } from "./model";
 
 export type ApiResult<T> =
   | { readonly ok: true; readonly data: T }
@@ -45,6 +45,36 @@ export function isSelectedProjectList(value: unknown): value is SelectedProject[
   return Array.isArray(value) && value.every(isSelectedProject);
 }
 
+export function isProjectClaim(value: unknown): value is ProjectClaim {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const { claimId, statement, status, citation } = value;
+  return (
+    typeof claimId === "string" &&
+    typeof statement === "string" &&
+    (status === "pending" || status === "verified") &&
+    typeof citation === "string"
+  );
+}
+
+export function isProjectDetail(value: unknown): value is ProjectDetail {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const { slug, name, summary, evidenceStatus, sourceUrl, lastReviewed, claims } = value;
+  return (
+    typeof slug === "string" &&
+    typeof name === "string" &&
+    typeof summary === "string" &&
+    (evidenceStatus === "pending" || evidenceStatus === "verified") &&
+    (sourceUrl === null || typeof sourceUrl === "string") &&
+    typeof lastReviewed === "string" &&
+    Array.isArray(claims) &&
+    claims.every(isProjectClaim)
+  );
+}
+
 export async function getProfile(): Promise<ApiResult<Profile>> {
   const url = `${getBackendBaseUrl()}/v1/profile`;
   try {
@@ -88,6 +118,37 @@ export async function getSelectedProjects(): Promise<ApiResult<readonly Selected
     const payload: unknown = await res.json();
     if (!isSelectedProjectList(payload)) {
       return { ok: false, error: "Backend response did not match SelectedProject list schema" };
+    }
+
+    return { ok: true, data: payload };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : "Failed to connect to backend projects service";
+    return { ok: false, error };
+  }
+}
+
+export async function getProjectBySlug(slug: string): Promise<ApiResult<ProjectDetail | null>> {
+  const encodedSlug = encodeURIComponent(slug);
+  const url = `${getBackendBaseUrl()}/v1/projects/${encodedSlug}`;
+  try {
+    const res = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (res.status === 404) {
+      return { ok: true, data: null };
+    }
+
+    if (!res.ok) {
+      return { ok: false, error: `Backend responded with HTTP ${res.status}` };
+    }
+
+    const payload: unknown = await res.json();
+    if (!isProjectDetail(payload)) {
+      return { ok: false, error: "Backend response did not match ProjectDetail schema" };
     }
 
     return { ok: true, data: payload };

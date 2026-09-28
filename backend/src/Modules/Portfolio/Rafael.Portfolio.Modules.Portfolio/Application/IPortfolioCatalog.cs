@@ -7,4 +7,6 @@ public interface IPortfolioCatalog
     Profile GetProfile();
 
     IReadOnlyList<ProjectSummary> GetProjects();
+
+    ProjectDetail? GetProjectBySlug(string slug);
 }
