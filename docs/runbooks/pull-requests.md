@@ -12,8 +12,10 @@ For an authorized roadmap item, Gemini may create one focused commit after the
 item acceptance checks pass. After Codex freezes and reviews that commit, either
 Kimi or Claude may create one focused follow-up commit for the assigned
 correction block. Do not amend or rewrite earlier handoff commits. These commit
-permissions never imply permission to push, open or change a pull request,
-deploy, apply infrastructure, or update `main`.
+permissions include a normal push of the validated block to `origin/develop`.
+Fetch first and stop on divergence; never force-push. They do not imply
+permission to open or change a pull request, deploy, apply infrastructure, or
+update `main`.
 
 ## Required close-out
 

@@ -37,9 +37,12 @@ commit. Codex reviews that correction commit and verifies the complete range
 from the original base through the correction head. Further correction rounds
 repeat the same pattern, preserving commit history.
 
-Implementation and correction agents may commit an authorized roadmap item,
-but they never push, open or mutate pull requests, deploy, apply infrastructure,
-or update `main` unless the owner explicitly authorizes that separate action.
+Implementation and correction agents may commit and push an authorized roadmap
+item or correction block directly to `origin/develop` after its required checks
+pass. Before pushing, they confirm the remote still descends from the recorded
+base; on divergence they stop rather than force-push or rewrite history. They
+never open or mutate pull requests, deploy, apply infrastructure, or update
+`main` unless the owner explicitly authorizes that separate action.
 
 ## Infrastructure workflow
 
