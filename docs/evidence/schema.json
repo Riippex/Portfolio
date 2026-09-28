@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicEvidenceInventory",
+  "type": "object",
+  "required": ["version", "lastUpdated", "items"],
+  "properties": {
+    "version": { "type": "string" },
+    "lastUpdated": { "type": "string", "format": "date" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "kind",
+          "title",
+          "summary",
+          "version",
+          "evidenceStatus",
+          "documentPath",
+          "lastReviewed",
+          "claims"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "slug": { "type": "string" },
+          "kind": { "type": "string", "enum": ["profile", "project"] },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "version": { "type": "string" },
+          "evidenceStatus": { "type": "string", "enum": ["pending", "verified"] },
+          "sourceUrl": { "type": ["string", "null"] },
+          "documentPath": { "type": "string" },
+          "lastReviewed": { "type": "string", "format": "date" },
+          "claims": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["claimId", "statement", "status", "citation"],
+              "properties": {
+                "claimId": { "type": "string" },
+                "statement": { "type": "string" },
+                "status": { "type": "string", "enum": ["pending", "verified"] },
+                "citation": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

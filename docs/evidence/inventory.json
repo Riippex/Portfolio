@@ -1,0 +1,93 @@
+{
+  "$schema": "./schema.json",
+  "version": "2026.09",
+  "lastUpdated": "2026-09-28",
+  "items": [
+    {
+      "id": "evidence-profile",
+      "slug": "profile",
+      "kind": "profile",
+      "title": "Rafael Patiño — AI Systems Engineer",
+      "summary": "Building autonomous agent systems, real-time computer vision, and cloud-native products.",
+      "version": "2026.09",
+      "evidenceStatus": "verified",
+      "sourceUrl": "https://github.com/Riippex/Portfolio",
+      "documentPath": "docs/evidence/profile.md",
+      "lastReviewed": "2026-09-28",
+      "claims": [
+        {
+          "claimId": "claim-profile-01",
+          "statement": "Specializes in autonomous agents, real-time computer vision, and cloud systems.",
+          "status": "verified",
+          "citation": "docs/evidence/profile.md#focus-areas"
+        },
+        {
+          "claimId": "claim-profile-02",
+          "statement": "Builds architectures prioritizing observability, deterministic safety boundaries, and evidence grounding.",
+          "status": "verified",
+          "citation": "docs/evidence/profile.md#engineering-principles"
+        }
+      ]
+    },
+    {
+      "id": "evidence-project-vextis",
+      "slug": "vextis",
+      "kind": "project",
+      "title": "Vextis",
+      "summary": "Verified architecture and outcomes will be published here.",
+      "version": "2026.09",
+      "evidenceStatus": "pending",
+      "sourceUrl": null,
+      "documentPath": "docs/evidence/projects/vextis.md",
+      "lastReviewed": "2026-09-28",
+      "claims": [
+        {
+          "claimId": "claim-vextis-01",
+          "statement": "Multi-tenant autonomous agent architecture with sandboxed memory and allowlisted retrieval.",
+          "status": "pending",
+          "citation": "docs/evidence/projects/vextis.md#architecture"
+        }
+      ]
+    },
+    {
+      "id": "evidence-project-kinetiq-v",
+      "slug": "kinetiq-v",
+      "kind": "project",
+      "title": "Kinetiq V",
+      "summary": "Verified architecture and outcomes will be published here.",
+      "version": "2026.09",
+      "evidenceStatus": "pending",
+      "sourceUrl": null,
+      "documentPath": "docs/evidence/projects/kinetiq-v.md",
+      "lastReviewed": "2026-09-28",
+      "claims": [
+        {
+          "claimId": "claim-kinetiq-v-01",
+          "statement": "Real-time computer vision processing pipeline with transient TTL state and edge-to-cloud coordination.",
+          "status": "pending",
+          "citation": "docs/evidence/projects/kinetiq-v.md#pipeline"
+        }
+      ]
+    },
+    {
+      "id": "evidence-project-jobty",
+      "slug": "jobty",
+      "kind": "project",
+      "title": "JobTY",
+      "summary": "Verified architecture and outcomes will be published here.",
+      "version": "2026.09",
+      "evidenceStatus": "pending",
+      "sourceUrl": null,
+      "documentPath": "docs/evidence/projects/jobty.md",
+      "lastReviewed": "2026-09-28",
+      "claims": [
+        {
+          "claimId": "claim-jobty-01",
+          "statement": "AI vacancy evaluation engine that identifies explicit skill evidence, inferences, and gaps.",
+          "status": "pending",
+          "citation": "docs/evidence/projects/jobty.md#matching-engine"
+        }
+      ]
+    }
+  ]
+}

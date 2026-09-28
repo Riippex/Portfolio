@@ -1,0 +1,97 @@
+using System.Text.Json;
+using Rafael.Portfolio.Modules.Knowledge.Domain;
+
+namespace Rafael.Portfolio.UnitTests;
+
+public sealed class EvidenceInventoryTests
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current != null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "README.md")) &&
+                Directory.Exists(Path.Combine(current.FullName, "docs", "evidence")))
+            {
+                return current.FullName;
+            }
+            current = current.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root directory.");
+    }
+
+    private static PublicEvidenceInventory LoadInventory()
+    {
+        var root = FindRepositoryRoot();
+        var path = Path.Combine(root, "docs", "evidence", "inventory.json");
+        Assert.True(File.Exists(path), $"Inventory manifest not found at {path}");
+
+        var json = File.ReadAllText(path);
+        var inventory = JsonSerializer.Deserialize<PublicEvidenceInventory>(json, JsonOptions);
+        Assert.NotNull(inventory);
+        return inventory;
+    }
+
+    [Fact]
+    public void Inventory_manifest_loads_and_has_valid_version()
+    {
+        var inventory = LoadInventory();
+
+        Assert.False(string.IsNullOrWhiteSpace(inventory.Version));
+        Assert.NotEmpty(inventory.Items);
+    }
+
+    [Fact]
+    public void Inventory_contains_profile_and_all_catalog_projects()
+    {
+        var inventory = LoadInventory();
+        var slugs = inventory.Items.Select(item => item.Slug).ToHashSet();
+
+        Assert.Contains("profile", slugs);
+        Assert.Contains("vextis", slugs);
+        Assert.Contains("kinetiq-v", slugs);
+        Assert.Contains("jobty", slugs);
+    }
+
+    [Fact]
+    public void Unverified_projects_remain_pending()
+    {
+        var inventory = LoadInventory();
+        var projects = inventory.Items.Where(item => item.Kind == "project");
+
+        Assert.All(projects, project =>
+        {
+            Assert.Equal(EvidenceStatus.Pending, project.EvidenceStatus);
+            Assert.All(project.Claims, claim => Assert.Equal(EvidenceStatus.Pending, claim.Status));
+        });
+    }
+
+    [Fact]
+    public void Profile_evidence_is_verified_with_valid_source_url()
+    {
+        var inventory = LoadInventory();
+        var profile = Assert.Single(inventory.Items, item => item.Kind == "profile");
+
+        Assert.Equal(EvidenceStatus.Verified, profile.EvidenceStatus);
+        Assert.False(string.IsNullOrWhiteSpace(profile.SourceUrl));
+    }
+
+    [Fact]
+    public void All_referenced_document_paths_exist_on_disk()
+    {
+        var root = FindRepositoryRoot();
+        var inventory = LoadInventory();
+
+        Assert.All(inventory.Items, item =>
+        {
+            var docFullPath = Path.Combine(root, item.DocumentPath.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(File.Exists(docFullPath), $"Document path {item.DocumentPath} does not exist at {docFullPath}");
+        });
+    }
+}
