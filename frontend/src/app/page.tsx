@@ -29,6 +29,11 @@ export default async function Home() {
         <div className="eyebrow">
           {profile ? `${profile.headline} · Colombia` : "Profile unavailable · Colombia"}
         </div>
+        {profile && (
+          <span className={`status-pill ${profile.evidenceStatus} hero-evidence`}>
+            Profile evidence {profile.evidenceStatus}
+          </span>
+        )}
         <h1>I build AI systems<span>that can explain their work.</span></h1>
         {profile ? (
           <p className="hero-copy">{profile.summary}</p>

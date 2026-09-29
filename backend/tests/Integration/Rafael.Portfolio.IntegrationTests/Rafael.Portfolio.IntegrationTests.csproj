@@ -8,8 +8,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="6.0.4" />
-    <PackageReference Include="JsonSchema.Net" Version="7.3.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
@@ -17,11 +15,6 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\..\src\Modules\Portfolio\Rafael.Portfolio.Modules.Portfolio\Rafael.Portfolio.Modules.Portfolio.csproj" />
-    <ProjectReference Include="..\..\..\src\Modules\Knowledge\Rafael.Portfolio.Modules.Knowledge\Rafael.Portfolio.Modules.Knowledge.csproj" />
   </ItemGroup>
 
 </Project>

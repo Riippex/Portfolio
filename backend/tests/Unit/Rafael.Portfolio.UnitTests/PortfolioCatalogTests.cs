@@ -34,6 +34,20 @@ public sealed class PortfolioCatalogTests
     }
 
     [Fact]
+    public void Catalog_profile_matches_canonical_inventory_without_drift()
+    {
+        var catalog = CreateCatalog();
+        var profileItem = Assert.Single(LoadManifest().Items, item => item.Kind == "profile");
+        var profile = catalog.GetProfile();
+
+        Assert.Equal(profileItem.Title, profile.Name);
+        Assert.Equal(profileItem.Headline, profile.Headline);
+        Assert.Equal(profileItem.Summary, profile.Summary);
+        Assert.Equal(profileItem.EvidenceStatus, profile.EvidenceStatus);
+        Assert.Equal(profileItem.FocusAreas, profile.FocusAreas);
+    }
+
+    [Fact]
     public void Projects_are_marked_pending_until_evidence_is_connected()
     {
         var catalog = CreateCatalog();

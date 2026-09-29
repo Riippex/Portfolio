@@ -18,11 +18,12 @@ export function isProfile(value: unknown): value is Profile {
   if (!isRecord(value)) {
     return false;
   }
-  const { name, headline, summary, focusAreas } = value;
+  const { name, headline, summary, evidenceStatus, focusAreas } = value;
   return (
     typeof name === "string" &&
     typeof headline === "string" &&
     typeof summary === "string" &&
+    (evidenceStatus === "pending" || evidenceStatus === "verified") &&
     Array.isArray(focusAreas) &&
     focusAreas.every((item) => typeof item === "string")
   );

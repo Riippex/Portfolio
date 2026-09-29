@@ -11,4 +11,6 @@ public sealed record PublicEvidenceItem(
     string? SourceUrl,
     string DocumentPath,
     DateOnly LastReviewed,
-    IReadOnlyList<EvidenceClaim> Claims);
+    IReadOnlyList<EvidenceClaim> Claims,
+    string? Headline = null,
+    IReadOnlyList<string>? FocusAreas = null);

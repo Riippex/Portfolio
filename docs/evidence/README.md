@@ -31,6 +31,8 @@ Each entry conforms to the following schema:
 - `evidenceStatus`: `pending` | `verified`
 - `sourceUrl`: public repository or documentation URL (nullable for pending)
 - `lastReviewed`: ISO 8601 date of verification or review
+- `headline`: professional headline (required for `profile` items)
+- `focusAreas`: non-empty list of focus areas (required for `profile` items)
 - `claims`: array of atomic claims:
   - `claimId`: unique claim identifier (e.g. `claim-vextis-01`)
   - `statement`: verifiable factual statement

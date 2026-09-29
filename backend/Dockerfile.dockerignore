@@ -1,0 +1,7 @@
+# Applied when building with the repository root as build context:
+#   docker build -f backend/Dockerfile .
+**
+!backend/**
+!docs/evidence/**
+backend/**/bin/
+backend/**/obj/

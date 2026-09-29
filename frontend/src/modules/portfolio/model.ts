@@ -4,6 +4,7 @@ export interface Profile {
   readonly name: string;
   readonly headline: string;
   readonly summary: string;
+  readonly evidenceStatus: EvidenceStatus;
   readonly focusAreas: readonly string[];
 }
 

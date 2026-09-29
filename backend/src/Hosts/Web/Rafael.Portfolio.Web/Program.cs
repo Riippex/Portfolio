@@ -7,7 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton<IPortfolioCatalog>(_ => EvidenceInventoryPortfolioCatalog.FromFile(
     builder.Configuration["EvidenceInventory:ManifestPath"]
-    ?? EvidenceInventoryPortfolioCatalog.FindDefaultManifestPath(AppContext.BaseDirectory)));
+    ?? EvidenceInventoryPortfolioCatalog.BundledManifestPath));
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();

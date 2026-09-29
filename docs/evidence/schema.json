@@ -33,6 +33,12 @@
           "sourceUrl": { "type": ["string", "null"] },
           "documentPath": { "type": "string" },
           "lastReviewed": { "type": "string", "format": "date" },
+          "headline": { "type": "string" },
+          "focusAreas": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
           "claims": {
             "type": "array",
             "items": {
@@ -46,7 +52,16 @@
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "kind": { "const": "profile" } },
+              "required": ["kind"]
+            },
+            "then": { "required": ["headline", "focusAreas"] }
+          }
+        ]
       }
     }
   }
