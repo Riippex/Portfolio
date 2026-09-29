@@ -84,6 +84,25 @@ public sealed class PublishedBackendSmokeTests
 
             using var unknownEvidence = await http.GetAsync(new Uri("/v1/evidence/unknown-evidence", UriKind.Relative));
             Assert.Equal(HttpStatusCode.NotFound, unknownEvidence.StatusCode);
+
+            using var searchResults = await http.GetAsync(new Uri("/v1/evidence/search?q=agents", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.OK, searchResults.StatusCode);
+            using var searchJson = JsonDocument.Parse(await searchResults.Content.ReadAsStringAsync());
+            var searchItems = searchJson.RootElement.EnumerateArray().ToArray();
+            Assert.NotEmpty(searchItems);
+            var firstSearchResult = searchItems[0];
+            Assert.Equal("public", firstSearchResult.GetProperty("visibility").GetString());
+            Assert.True(firstSearchResult.GetProperty("score").GetDouble() > 0);
+            Assert.NotEmpty(firstSearchResult.GetProperty("citations").EnumerateArray().ToArray());
+
+            using var filteredSearch = await http.GetAsync(new Uri("/v1/evidence/search?q=agents&slug=vextis", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.OK, filteredSearch.StatusCode);
+            using var filteredJson = JsonDocument.Parse(await filteredSearch.Content.ReadAsStringAsync());
+            Assert.All(filteredJson.RootElement.EnumerateArray(), chunk =>
+                Assert.Equal("vextis", chunk.GetProperty("slug").GetString()));
+
+            using var emptySearch = await http.GetAsync(new Uri("/v1/evidence/search?q=", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.BadRequest, emptySearch.StatusCode);
         }
         finally
         {

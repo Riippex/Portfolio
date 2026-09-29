@@ -13,6 +13,8 @@ builder.Services.AddSingleton<IPortfolioCatalog>(_ => EvidenceInventoryPortfolio
 builder.Services.AddSingleton<IEvidenceSource>(_ => FileSystemEvidenceSource.FromManifestFile(
     builder.Configuration["EvidenceInventory:ManifestPath"]
     ?? FileSystemEvidenceSource.BundledManifestPath));
+builder.Services.AddSingleton<IEvidenceRetriever>(sp =>
+    new InMemoryLexicalEvidenceRetriever(sp.GetRequiredService<IEvidenceSource>()));
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();
