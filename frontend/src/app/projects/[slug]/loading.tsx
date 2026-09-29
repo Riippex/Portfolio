@@ -10,7 +10,7 @@ export default function ProjectLoading() {
       </nav>
       <div className="status-banner">
         <strong>Loading project evidence</strong>
-        <p>Retrieving case study and verified claims from backend service...</p>
+        <p>Retrieving case study and claim records from backend service...</p>
       </div>
     </main>
   );

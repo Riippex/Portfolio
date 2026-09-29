@@ -109,9 +109,9 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
           <aside className="status-banner notice-banner" role="note">
             <strong>Evidence connection pending</strong>
             <p>
-              This system is part of Rafael’s verified engineering background, but
-              public case study artifacts and source repositories are pending public
-              linking. All claims below remain marked pending until verified.
+              Public case study artifacts and source repositories for this system
+              are pending owner verification and public linking. All claims below
+              remain marked pending until verified public evidence is connected.
             </p>
           </aside>
         )}

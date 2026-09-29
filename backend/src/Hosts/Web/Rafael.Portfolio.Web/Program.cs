@@ -5,7 +5,9 @@ using Rafael.Portfolio.Web.Endpoints;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
-builder.Services.AddSingleton<IPortfolioCatalog, InMemoryPortfolioCatalog>();
+builder.Services.AddSingleton<IPortfolioCatalog>(_ => EvidenceInventoryPortfolioCatalog.FromFile(
+    builder.Configuration["EvidenceInventory:ManifestPath"]
+    ?? EvidenceInventoryPortfolioCatalog.FindDefaultManifestPath(AppContext.BaseDirectory)));
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();

@@ -10,26 +10,9 @@ public sealed class EvidenceInventoryTests
         PropertyNameCaseInsensitive = true
     };
 
-    private static string FindRepositoryRoot()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current != null)
-        {
-            if (File.Exists(Path.Combine(current.FullName, "README.md")) &&
-                Directory.Exists(Path.Combine(current.FullName, "docs", "evidence")))
-            {
-                return current.FullName;
-            }
-            current = current.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate repository root directory.");
-    }
-
     private static PublicEvidenceInventory LoadInventory()
     {
-        var root = FindRepositoryRoot();
-        var path = Path.Combine(root, "docs", "evidence", "inventory.json");
+        var path = TestRepositoryRoot.EvidenceInventoryManifestPath;
         Assert.True(File.Exists(path), $"Inventory manifest not found at {path}");
 
         var json = File.ReadAllText(path);
@@ -97,7 +80,7 @@ public sealed class EvidenceInventoryTests
     [Fact]
     public void All_referenced_document_paths_exist_on_disk()
     {
-        var root = FindRepositoryRoot();
+        var root = TestRepositoryRoot.Find();
         var inventory = LoadInventory();
 
         Assert.All(inventory.Items, item =>
