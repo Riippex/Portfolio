@@ -73,13 +73,25 @@ public sealed class EvidenceInventoryTests
     }
 
     [Fact]
-    public void Profile_evidence_is_verified_with_valid_source_url()
+    public void Profile_evidence_remains_pending_without_external_source()
     {
         var inventory = LoadInventory();
         var profile = Assert.Single(inventory.Items, item => item.Kind == "profile");
 
-        Assert.Equal(EvidenceStatus.Verified, profile.EvidenceStatus);
-        Assert.False(string.IsNullOrWhiteSpace(profile.SourceUrl));
+        // The Portfolio repository containing the claims is circular evidence, so
+        // the profile stays pending until the owner links an externally
+        // inspectable public artifact.
+        if (string.IsNullOrWhiteSpace(profile.SourceUrl))
+        {
+            Assert.Equal(EvidenceStatus.Pending, profile.EvidenceStatus);
+            Assert.All(profile.Claims, claim => Assert.Equal(EvidenceStatus.Pending, claim.Status));
+        }
+        else
+        {
+            Assert.False(
+                profile.SourceUrl.Contains("github.com/Riippex/Portfolio", StringComparison.OrdinalIgnoreCase),
+                "The Portfolio repository cannot be its own evidence source.");
+        }
     }
 
     [Fact]

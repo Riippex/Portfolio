@@ -1,7 +1,7 @@
 {
   "$schema": "./schema.json",
   "version": "2026.09",
-  "lastUpdated": "2026-09-28",
+  "lastUpdated": "2026-09-29",
   "items": [
     {
       "id": "evidence-profile",
@@ -10,21 +10,21 @@
       "title": "Rafael Patiño — AI Systems Engineer",
       "summary": "Building autonomous agent systems, real-time computer vision, and cloud-native products.",
       "version": "2026.09",
-      "evidenceStatus": "verified",
-      "sourceUrl": "https://github.com/Riippex/Portfolio",
+      "evidenceStatus": "pending",
+      "sourceUrl": null,
       "documentPath": "docs/evidence/profile.md",
-      "lastReviewed": "2026-09-28",
+      "lastReviewed": "2026-09-29",
       "claims": [
         {
           "claimId": "claim-profile-01",
           "statement": "Specializes in autonomous agents, real-time computer vision, and cloud systems.",
-          "status": "verified",
+          "status": "pending",
           "citation": "docs/evidence/profile.md#focus-areas"
         },
         {
           "claimId": "claim-profile-02",
           "statement": "Builds architectures prioritizing observability, deterministic safety boundaries, and evidence grounding.",
-          "status": "verified",
+          "status": "pending",
           "citation": "docs/evidence/profile.md#engineering-principles"
         }
       ]

@@ -2,10 +2,12 @@
 
 - Identifier: `evidence-profile`
 - Kind: Profile
-- Status: `verified`
+- Status: `pending`
 - Version: `2026.09`
-- Last reviewed: 2026-09-28
-- Canonical Source: [Portfolio Repository](https://github.com/Riippex/Portfolio)
+- Last reviewed: 2026-09-29
+- Canonical Source: none yet — an externally inspectable public artifact must be
+  linked and owner-approved before this record can move to `verified`. The
+  Portfolio repository that contains these claims is not valid evidence for them.
 
 ## Summary
 
