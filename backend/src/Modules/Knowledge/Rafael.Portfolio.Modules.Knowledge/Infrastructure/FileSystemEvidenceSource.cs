@@ -149,7 +149,7 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
             Path.Combine(evidenceRoot, normalized.Replace('/', Path.DirectorySeparatorChar)));
         var rootWithSeparator = evidenceRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
-        if (!fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+        if (!fullPath.StartsWith(rootWithSeparator, PathContainmentComparison))
         {
             throw new InvalidOperationException(
                 $"Evidence document path '{item.DocumentPath}' for item '{item.Id}' escapes the evidence directory '{evidenceRoot}'.");
@@ -157,6 +157,9 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
 
         return fullPath;
     }
+
+    private static StringComparison PathContainmentComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private static string NormalizePath(string path)
     {

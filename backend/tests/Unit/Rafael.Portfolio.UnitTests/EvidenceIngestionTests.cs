@@ -243,6 +243,43 @@ public sealed class EvidenceIngestionTests
         }
     }
 
+    [Fact]
+    public void FromManifestFile_handles_case_variant_sibling_paths_per_filesystem_semantics()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var evidenceDir = Path.Combine(root, "evidence");
+            Directory.CreateDirectory(evidenceDir);
+
+            // On Windows this is the same directory as evidenceDir; on
+            // Linux/macOS it is a distinct sibling that must stay out of reach.
+            var siblingDir = Path.Combine(root, "Evidence");
+            Directory.CreateDirectory(siblingDir);
+            File.WriteAllText(Path.Combine(siblingDir, "secret.md"), "# Secret");
+
+            var manifestPath = Path.Combine(evidenceDir, "inventory.json");
+            File.WriteAllText(manifestPath, ManifestJson("docs/evidence/../Evidence/secret.md"));
+
+            if (OperatingSystem.IsWindows())
+            {
+                var source = FileSystemEvidenceSource.FromManifestFile(manifestPath);
+                Assert.Single(source.GetAllEvidence());
+            }
+            else
+            {
+                var ex = Assert.Throws<InvalidOperationException>(() =>
+                    FileSystemEvidenceSource.FromManifestFile(manifestPath));
+
+                Assert.Contains("escapes the evidence directory", ex.Message);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
