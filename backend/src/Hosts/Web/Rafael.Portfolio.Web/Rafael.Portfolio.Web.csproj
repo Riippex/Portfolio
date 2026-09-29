@@ -19,5 +19,6 @@
 
   <ItemGroup>
     <Content Include="..\..\..\..\..\docs\evidence\inventory.json" Link="evidence\inventory.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\..\..\..\docs\evidence\**\*.md" Link="evidence\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

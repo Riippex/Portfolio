@@ -22,6 +22,10 @@ public sealed class PublishedBackendSmokeTests
 
             var bundledManifest = Path.Combine(publishDir, "evidence", "inventory.json");
             Assert.True(File.Exists(bundledManifest), $"Published artifact is missing {bundledManifest}");
+            var bundledProfile = Path.Combine(publishDir, "evidence", "profile.md");
+            Assert.True(File.Exists(bundledProfile), $"Published artifact is missing {bundledProfile}");
+            var bundledVextis = Path.Combine(publishDir, "evidence", "projects", "vextis.md");
+            Assert.True(File.Exists(bundledVextis), $"Published artifact is missing {bundledVextis}");
 
             var port = GetFreePort();
             host = Process.Start(new ProcessStartInfo
@@ -59,6 +63,27 @@ public sealed class PublishedBackendSmokeTests
             Assert.Equal(HttpStatusCode.OK, profile.StatusCode);
             using var profileJson = JsonDocument.Parse(await profile.Content.ReadAsStringAsync());
             Assert.Equal("pending", profileJson.RootElement.GetProperty("evidenceStatus").GetString());
+
+            using var evidence = await http.GetAsync(new Uri("/v1/evidence", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.OK, evidence.StatusCode);
+            using var evidenceJson = JsonDocument.Parse(await evidence.Content.ReadAsStringAsync());
+            var evidenceItems = evidenceJson.RootElement.EnumerateArray().ToArray();
+            Assert.Equal(4, evidenceItems.Length);
+            Assert.All(evidenceItems, doc =>
+            {
+                Assert.Equal("public", doc.GetProperty("visibility").GetString());
+                Assert.True(doc.GetProperty("sections").GetArrayLength() > 0);
+            });
+
+            using var vextisEvidence = await http.GetAsync(new Uri("/v1/evidence/vextis", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.OK, vextisEvidence.StatusCode);
+            using var vextisEvidenceJson = JsonDocument.Parse(await vextisEvidence.Content.ReadAsStringAsync());
+            Assert.Equal("public", vextisEvidenceJson.RootElement.GetProperty("visibility").GetString());
+            Assert.Equal("vextis", vextisEvidenceJson.RootElement.GetProperty("item").GetProperty("slug").GetString());
+            Assert.Equal("pending", vextisEvidenceJson.RootElement.GetProperty("item").GetProperty("evidenceStatus").GetString());
+
+            using var unknownEvidence = await http.GetAsync(new Uri("/v1/evidence/unknown-evidence", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.NotFound, unknownEvidence.StatusCode);
         }
         finally
         {
