@@ -171,4 +171,162 @@ public sealed class EvidenceIngestionTests
 
         Assert.Contains("does not match any section", ex.Message);
     }
+
+    [Fact]
+    public void FromManifestFile_rejects_manifest_violating_the_canonical_schema()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "test.md"), "# Test\n\n## Section\n\nContent");
+            var manifestPath = Path.Combine(root, "inventory.json");
+            File.WriteAllText(manifestPath, ManifestJson("docs/evidence/test.md", evidenceStatus: "corrupted"));
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                FileSystemEvidenceSource.FromManifestFile(manifestPath));
+
+            Assert.Contains("canonical JSON Schema", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FromManifestFile_rejects_document_paths_escaping_the_evidence_directory()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var evidenceDir = Path.Combine(root, "evidence");
+            Directory.CreateDirectory(evidenceDir);
+
+            // The target file exists outside the evidence directory; the
+            // rejection must come from containment, not from a missing file.
+            File.WriteAllText(Path.Combine(root, "secret.md"), "# Secret");
+
+            var manifestPath = Path.Combine(evidenceDir, "inventory.json");
+            File.WriteAllText(manifestPath, ManifestJson("docs/evidence/../secret.md"));
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                FileSystemEvidenceSource.FromManifestFile(manifestPath));
+
+            Assert.Contains("escapes the evidence directory", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FromManifestFile_rejects_rooted_document_paths()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var documentPath = Path.Combine(root, "test.md");
+            File.WriteAllText(documentPath, "# Test\n\n## Section\n\nContent");
+
+            var manifestPath = Path.Combine(root, "inventory.json");
+            File.WriteAllText(manifestPath, ManifestJson(documentPath));
+
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                FileSystemEvidenceSource.FromManifestFile(manifestPath));
+
+            Assert.Contains("must be a relative path", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Ingestion_fails_fast_on_empty_claim_citation(string citation)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            new FileSystemEvidenceSource(InventoryWithClaim(citation), TestDocuments()));
+
+        Assert.Contains("must declare a citation", ex.Message);
+    }
+
+    [Fact]
+    public void Ingestion_fails_fast_when_claim_citation_has_no_anchor()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            new FileSystemEvidenceSource(InventoryWithClaim("docs/evidence/test.md"), TestDocuments()));
+
+        Assert.Contains("must include a non-empty section anchor", ex.Message);
+    }
+
+    [Fact]
+    public void Ingestion_fails_fast_on_cross_document_claim_citation()
+    {
+        // The anchor "section" exists in the item's own document, but the
+        // citation targets a different document and must still be rejected.
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            new FileSystemEvidenceSource(
+                InventoryWithClaim("docs/evidence/other.md#section"), TestDocuments()));
+
+        Assert.Contains("must target the item's own canonical document", ex.Message);
+    }
+
+    private static string CreateTempDirectory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"evidence-ingestion-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private static string ManifestJson(string documentPath, string evidenceStatus = "pending") =>
+        $$"""
+        {
+          "version": "2026.09",
+          "lastUpdated": "2026-09-29",
+          "items": [
+            {
+              "id": "evidence-test",
+              "slug": "test",
+              "kind": "project",
+              "title": "Test Project",
+              "summary": "Summary",
+              "version": "2026.09",
+              "evidenceStatus": "{{evidenceStatus}}",
+              "sourceUrl": null,
+              "documentPath": "{{documentPath.Replace("\\", "\\\\").Replace("\"", "\\\"")}}",
+              "lastReviewed": "2026-09-29",
+              "claims": []
+            }
+          ]
+        }
+        """;
+
+    private static PublicEvidenceInventory InventoryWithClaim(string citation) =>
+        new(
+            "2026.09",
+            new DateOnly(2026, 9, 29),
+            [
+                new PublicEvidenceItem(
+                    "evidence-test",
+                    "test",
+                    "project",
+                    "Test Project",
+                    "Summary",
+                    "2026.09",
+                    EvidenceStatus.Pending,
+                    null,
+                    "docs/evidence/test.md",
+                    new DateOnly(2026, 9, 29),
+                    [new EvidenceClaim("claim-01", "Statement", EvidenceStatus.Pending, citation)])
+            ]);
+
+    private static Dictionary<string, string> TestDocuments() =>
+        new()
+        {
+            ["docs/evidence/test.md"] = "# Test\n\n## Section\n\nContent"
+        };
 }

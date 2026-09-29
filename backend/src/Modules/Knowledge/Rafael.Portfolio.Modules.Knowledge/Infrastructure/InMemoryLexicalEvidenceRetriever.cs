@@ -106,6 +106,22 @@ public sealed class InMemoryLexicalEvidenceRetriever : IEvidenceRetriever
     {
         ArgumentNullException.ThrowIfNull(query);
 
+        if (query.QueryText.Length > RetrievalQuery.MaxQueryTextLength)
+        {
+            throw new ArgumentException(
+                $"Query text exceeds the maximum length of {RetrievalQuery.MaxQueryTextLength} characters.",
+                nameof(query));
+        }
+
+        if (query.SlugFilter is not null &&
+            (query.SlugFilter.Length > RetrievalQuery.MaxSlugFilterLength ||
+             !RetrievalQuery.IsValidSlugFilter(query.SlugFilter)))
+        {
+            throw new ArgumentException(
+                "Slug filter must be a non-empty lowercase slug (letters, digits, hyphens) within the maximum length.",
+                nameof(query));
+        }
+
         if (string.IsNullOrWhiteSpace(query.QueryText))
         {
             return [];

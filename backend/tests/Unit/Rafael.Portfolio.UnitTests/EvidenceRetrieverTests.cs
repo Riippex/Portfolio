@@ -117,6 +117,47 @@ public sealed class EvidenceRetrieverTests
     }
 
     [Fact]
+    public void Retrieve_rejects_oversized_query_text()
+    {
+        var retriever = CreateRetriever();
+        var oversized = new string('a', RetrievalQuery.MaxQueryTextLength + 1);
+
+        Assert.Throws<ArgumentException>(() => retriever.Retrieve(oversized));
+    }
+
+    [Theory]
+    [InlineData("Invalid_Slug!!")]
+    [InlineData("../escape")]
+    [InlineData("")]
+    public void Retrieve_rejects_invalid_slug_filter(string slug)
+    {
+        var retriever = CreateRetriever();
+
+        Assert.Throws<ArgumentException>(() => retriever.Retrieve("agents", slugFilter: slug));
+    }
+
+    [Fact]
+    public void Retrieve_rejects_oversized_slug_filter()
+    {
+        var retriever = CreateRetriever();
+        var oversized = new string('a', RetrievalQuery.MaxSlugFilterLength + 1);
+
+        Assert.Throws<ArgumentException>(() => retriever.Retrieve("agents", slugFilter: oversized));
+    }
+
+    [Fact]
+    public void Retrieve_clamps_limit_between_one_and_fifty()
+    {
+        var retriever = CreateRetriever();
+
+        var high = retriever.Retrieve("evidence architecture systems", limit: 500);
+        Assert.InRange(high.Count, 1, 50);
+
+        var low = retriever.Retrieve("evidence architecture systems", limit: 0);
+        Assert.True(low.Count <= 1);
+    }
+
+    [Fact]
     public void All_retrieved_chunks_carry_required_metadata()
     {
         var retriever = CreateRetriever();

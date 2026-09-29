@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Rafael.Portfolio.Modules.Knowledge.Application;
+using Rafael.Portfolio.Modules.Knowledge.Domain;
 
 namespace Rafael.Portfolio.Web.Endpoints;
 
@@ -19,6 +20,18 @@ public static class KnowledgeEndpoints
             if (string.IsNullOrWhiteSpace(query))
             {
                 return Results.BadRequest(new { error = "Query parameter 'q' is required and cannot be empty." });
+            }
+
+            if (query.Length > RetrievalQuery.MaxQueryTextLength)
+            {
+                return Results.BadRequest(new { error = $"Query parameter 'q' exceeds the maximum length of {RetrievalQuery.MaxQueryTextLength} characters." });
+            }
+
+            if (slug is not null &&
+                (slug.Length > RetrievalQuery.MaxSlugFilterLength ||
+                 !RetrievalQuery.IsValidSlugFilter(slug)))
+            {
+                return Results.BadRequest(new { error = "Query parameter 'slug' must be a valid evidence slug (letters, digits, hyphens)." });
             }
 
             var results = retriever.Retrieve(query, limit ?? 5, slug);

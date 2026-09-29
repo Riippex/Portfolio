@@ -83,16 +83,18 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
         }
 
         var json = File.ReadAllText(manifestPath);
+        EvidenceManifestValidator.Validate(json);
+
         var inventory = JsonSerializer.Deserialize<PublicEvidenceInventory>(json, JsonOptions)
             ?? throw new InvalidOperationException(
                 $"Canonical evidence inventory manifest at '{manifestPath}' could not be deserialized.");
 
-        var manifestDirectory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
+        var evidenceRoot = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
         var documents = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var item in inventory.Items)
         {
-            var fullPath = ResolveFilePath(manifestDirectory, item.DocumentPath);
+            var fullPath = ResolveContainedPath(evidenceRoot, item);
             if (!File.Exists(fullPath))
             {
                 throw new InvalidOperationException(
@@ -134,22 +136,26 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
         return null;
     }
 
-    private static string ResolveFilePath(string manifestDirectory, string documentPath)
+    private static string ResolveContainedPath(string evidenceRoot, PublicEvidenceItem item)
     {
-        var normalized = NormalizePath(documentPath);
-        var direct = Path.Combine(manifestDirectory, normalized.Replace('/', Path.DirectorySeparatorChar));
-        if (File.Exists(direct))
+        var normalized = NormalizePath(item.DocumentPath);
+        if (string.IsNullOrWhiteSpace(normalized) || Path.IsPathRooted(normalized))
         {
-            return direct;
+            throw new InvalidOperationException(
+                $"Evidence document path '{item.DocumentPath}' for item '{item.Id}' must be a relative path inside the evidence directory.");
         }
 
-        var verbatim = Path.Combine(manifestDirectory, documentPath.Replace('/', Path.DirectorySeparatorChar));
-        if (File.Exists(verbatim))
+        var fullPath = Path.GetFullPath(
+            Path.Combine(evidenceRoot, normalized.Replace('/', Path.DirectorySeparatorChar)));
+        var rootWithSeparator = evidenceRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+        if (!fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
         {
-            return verbatim;
+            throw new InvalidOperationException(
+                $"Evidence document path '{item.DocumentPath}' for item '{item.Id}' escapes the evidence directory '{evidenceRoot}'.");
         }
 
-        return direct;
+        return fullPath;
     }
 
     private static string NormalizePath(string path)
@@ -181,18 +187,30 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
 
             if (string.IsNullOrWhiteSpace(claim.Citation))
             {
-                continue;
+                throw new InvalidOperationException(
+                    $"Claim '{claim.ClaimId}' in item '{item.Id}' must declare a citation.");
             }
 
             var hashIndex = claim.Citation.IndexOf('#');
-            if (hashIndex >= 0)
+            var citationDocument = hashIndex >= 0 ? claim.Citation[..hashIndex] : claim.Citation;
+            var anchor = hashIndex >= 0 ? claim.Citation[(hashIndex + 1)..].Trim() : string.Empty;
+
+            if (!string.Equals(citationDocument, item.DocumentPath, StringComparison.OrdinalIgnoreCase))
             {
-                var anchor = claim.Citation[(hashIndex + 1)..].Trim();
-                if (!string.IsNullOrWhiteSpace(anchor) && !sectionSlugs.Contains(anchor))
-                {
-                    throw new InvalidOperationException(
-                        $"Claim '{claim.ClaimId}' citation anchor '#{anchor}' does not match any section in '{item.DocumentPath}'.");
-                }
+                throw new InvalidOperationException(
+                    $"Claim '{claim.ClaimId}' citation '{claim.Citation}' must target the item's own canonical document '{item.DocumentPath}'.");
+            }
+
+            if (string.IsNullOrWhiteSpace(anchor))
+            {
+                throw new InvalidOperationException(
+                    $"Claim '{claim.ClaimId}' citation '{claim.Citation}' must include a non-empty section anchor.");
+            }
+
+            if (!sectionSlugs.Contains(anchor))
+            {
+                throw new InvalidOperationException(
+                    $"Claim '{claim.ClaimId}' citation anchor '#{anchor}' does not match any section in '{item.DocumentPath}'.");
             }
         }
     }

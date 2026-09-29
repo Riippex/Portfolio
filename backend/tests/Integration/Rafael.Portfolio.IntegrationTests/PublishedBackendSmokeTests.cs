@@ -103,6 +103,15 @@ public sealed class PublishedBackendSmokeTests
 
             using var emptySearch = await http.GetAsync(new Uri("/v1/evidence/search?q=", UriKind.Relative));
             Assert.Equal(HttpStatusCode.BadRequest, emptySearch.StatusCode);
+
+            var oversizedQuery = new string('a', 201);
+            using var oversizedSearch = await http.GetAsync(
+                new Uri($"/v1/evidence/search?q={oversizedQuery}", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.BadRequest, oversizedSearch.StatusCode);
+
+            using var invalidSlugSearch = await http.GetAsync(
+                new Uri("/v1/evidence/search?q=agents&slug=Invalid_Slug!!", UriKind.Relative));
+            Assert.Equal(HttpStatusCode.BadRequest, invalidSlugSearch.StatusCode);
         }
         finally
         {
