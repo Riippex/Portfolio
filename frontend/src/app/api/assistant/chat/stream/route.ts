@@ -10,12 +10,6 @@ export async function POST(request: Request): Promise<Response> {
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
-        ...(request.headers.get("CF-Connecting-IP")
-          ? { "CF-Connecting-IP": request.headers.get("CF-Connecting-IP")! }
-          : {}),
-        ...(request.headers.get("x-forwarded-for")
-          ? { "X-Forwarded-For": request.headers.get("x-forwarded-for")! }
-          : {}),
       },
       body,
     });

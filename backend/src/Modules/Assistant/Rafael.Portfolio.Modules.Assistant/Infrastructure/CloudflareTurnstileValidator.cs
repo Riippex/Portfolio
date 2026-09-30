@@ -6,31 +6,29 @@ namespace Rafael.Portfolio.Modules.Assistant.Infrastructure;
 
 public sealed class CloudflareTurnstileValidator : ITurnstileValidator
 {
-    private readonly HttpClient? _httpClient;
-    private readonly string? _secretKey;
+    private readonly HttpClient _httpClient;
+    private readonly string _secretKey;
 
-    public CloudflareTurnstileValidator(HttpClient? httpClient = null, string? secretKey = null)
+    public CloudflareTurnstileValidator(HttpClient httpClient, string secretKey)
     {
-        _httpClient = httpClient;
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+
+        if (string.IsNullOrWhiteSpace(secretKey))
+        {
+            throw new ArgumentException(
+                "A Turnstile secret key is required to construct the validator. " +
+                "Use the development bypass only when no secret is configured.",
+                nameof(secretKey));
+        }
+
         _secretKey = secretKey;
     }
 
     public async Task<bool> ValidateAsync(string? token, string? remoteIp, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(_secretKey))
-        {
-            // Bypassed when secret key is not configured (e.g. local dev, test environments)
-            return true;
-        }
-
         if (string.IsNullOrWhiteSpace(token))
         {
             return false;
-        }
-
-        if (_httpClient is null)
-        {
-            return true;
         }
 
         try
@@ -57,7 +55,6 @@ public sealed class CloudflareTurnstileValidator : ITurnstileValidator
         }
         catch (Exception)
         {
-            // Fail closed on error when Turnstile is enforced
             return false;
         }
     }

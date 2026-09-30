@@ -14,11 +14,15 @@ public sealed class AssistantStreamTests
             Chunks;
     }
 
+    private static AssistantService CreateService(MockEvidenceAdapter adapter) =>
+        new(adapter, new DeterministicGroundedSynthesizer(), new AssistantSafetyEvaluator());
+
     private static AssistantEvidenceChunk CreateChunk(
         string chunkId = "chunk-test-1",
         string slug = "vextis",
         string title = "Vextis Architecture",
-        double score = 4.0)
+        double score = 4.0,
+        string evidenceStatus = "verified")
     {
         return new AssistantEvidenceChunk(
             ChunkId: chunkId,
@@ -30,7 +34,7 @@ public sealed class AssistantStreamTests
             Content: "Autonomous multi-agent workflow orchestration with state machines.",
             Claims: ["claim-1"],
             SourceUrl: "https://example.com/source",
-            EvidenceStatus: "pending",
+            EvidenceStatus: evidenceStatus,
             Version: "2026.09",
             Visibility: "public",
             Score: score,
@@ -44,8 +48,7 @@ public sealed class AssistantStreamTests
         {
             Chunks = [CreateChunk()]
         };
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(adapter);
 
         var events = new List<AssistantStreamEvent>();
         await foreach (var evt in service.StreamChatAsync(new AssistantChatRequest("Explain Vextis")))
@@ -55,23 +58,19 @@ public sealed class AssistantStreamTests
 
         Assert.NotEmpty(events);
 
-        // First event is status
         Assert.Equal("status", events[0].Type);
         Assert.Equal(AssistantGroundingStatus.Grounded, events[0].GroundingStatus);
 
-        // Citation events follow
         var citationEvents = events.Where(e => e.Type == "citation").ToList();
         Assert.Single(citationEvents);
         Assert.Equal("chunk-test-1", citationEvents[0].Citation?.ChunkId);
         Assert.Equal("vextis", citationEvents[0].Citation?.Slug);
 
-        // Token events follow
         var tokenEvents = events.Where(e => e.Type == "token").ToList();
         Assert.NotEmpty(tokenEvents);
         var combinedText = string.Join(" ", tokenEvents.Select(t => t.Text));
         Assert.Contains("Autonomous multi-agent workflow orchestration", combinedText);
 
-        // Last event is done
         Assert.Equal("done", events[^1].Type);
         Assert.True(events[^1].Done);
     }
@@ -79,9 +78,7 @@ public sealed class AssistantStreamTests
     [Fact]
     public async Task StreamChatAsync_yields_not_documented_for_empty_matches()
     {
-        var adapter = new MockEvidenceAdapter { Chunks = [] };
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new MockEvidenceAdapter());
 
         var events = new List<AssistantStreamEvent>();
         await foreach (var evt in service.StreamChatAsync(new AssistantChatRequest("Unmatched query")))
@@ -102,14 +99,34 @@ public sealed class AssistantStreamTests
         Assert.Equal("done", events[^1].Type);
     }
 
+    [Fact]
+    public async Task StreamChatAsync_yields_not_documented_when_only_pending_evidence_matches()
+    {
+        var adapter = new MockEvidenceAdapter
+        {
+            Chunks = [CreateChunk(evidenceStatus: "pending")]
+        };
+        var service = CreateService(adapter);
+
+        var events = new List<AssistantStreamEvent>();
+        await foreach (var evt in service.StreamChatAsync(new AssistantChatRequest("Explain Vextis")))
+        {
+            events.Add(evt);
+        }
+
+        Assert.Equal("status", events[0].Type);
+        Assert.Equal(AssistantGroundingStatus.NotDocumented, events[0].GroundingStatus);
+        Assert.DoesNotContain(events, e => e.Type == "citation");
+        Assert.Contains(events, e => e.Type == "token" && e.Text is not null && e.Text.Contains("not have documented evidence"));
+        Assert.Equal("done", events[^1].Type);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
     public async Task StreamChatAsync_throws_on_empty_message(string empty)
     {
-        var adapter = new MockEvidenceAdapter();
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new MockEvidenceAdapter());
 
         await Assert.ThrowsAsync<ArgumentException>(async () =>
         {
@@ -122,9 +139,7 @@ public sealed class AssistantStreamTests
     [Fact]
     public async Task StreamChatAsync_throws_on_oversized_message()
     {
-        var adapter = new MockEvidenceAdapter();
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new MockEvidenceAdapter());
 
         var oversized = new string('x', AssistantChatRequest.MaxMessageLength + 1);
 

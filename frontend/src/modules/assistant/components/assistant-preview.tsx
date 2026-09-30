@@ -13,7 +13,7 @@ export function AssistantPreview() {
         <div className="terminal-line answer">
           <span className="label">Rafael AI</span>
           <span>
-            I’ll compare the role with <strong>verified projects, experience, and skills</strong>.
+            I’ll compare the role with <strong>documented projects and public evidence</strong>.
             Every material claim will include its source; undocumented experience will be marked as a gap.
           </span>
         </div>

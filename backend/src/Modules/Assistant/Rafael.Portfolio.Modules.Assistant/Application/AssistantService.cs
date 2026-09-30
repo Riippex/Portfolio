@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using Rafael.Portfolio.Modules.Assistant.Domain;
-using Rafael.Portfolio.Modules.Assistant.Infrastructure;
 
 namespace Rafael.Portfolio.Modules.Assistant.Application;
 
@@ -12,6 +11,8 @@ public sealed class AssistantService : IAssistantService
     private const string NotDocumentedMessage =
         "I do not have documented evidence in Rafael's public portfolio regarding that topic. Only public, verified case studies and portfolio claims are available.";
 
+    private const string VerifiedEvidenceStatus = "verified";
+
     private readonly IAssistantEvidenceAdapter _evidenceAdapter;
     private readonly IAssistantSynthesizer _synthesizer;
     private readonly IAssistantSafetyEvaluator _safetyEvaluator;
@@ -19,11 +20,11 @@ public sealed class AssistantService : IAssistantService
     public AssistantService(
         IAssistantEvidenceAdapter evidenceAdapter,
         IAssistantSynthesizer synthesizer,
-        IAssistantSafetyEvaluator? safetyEvaluator = null)
+        IAssistantSafetyEvaluator safetyEvaluator)
     {
         _evidenceAdapter = evidenceAdapter ?? throw new ArgumentNullException(nameof(evidenceAdapter));
         _synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
-        _safetyEvaluator = safetyEvaluator ?? new AssistantSafetyEvaluator();
+        _safetyEvaluator = safetyEvaluator ?? throw new ArgumentNullException(nameof(safetyEvaluator));
     }
 
     public AssistantChatResponse Chat(AssistantChatRequest request)
@@ -39,14 +40,7 @@ public sealed class AssistantService : IAssistantService
                 Citations: []);
         }
 
-        var candidateChunks = _evidenceAdapter.SearchEvidence(
-            request.Message,
-            limit: 5,
-            slugFilter: request.Slug);
-
-        var relevantChunks = candidateChunks
-            .Where(chunk => chunk.Score > 0)
-            .ToList();
+        var relevantChunks = FindVerifiedChunks(request);
 
         return _synthesizer.Synthesize(request.Message, relevantChunks);
     }
@@ -66,14 +60,7 @@ public sealed class AssistantService : IAssistantService
             yield break;
         }
 
-        var candidateChunks = _evidenceAdapter.SearchEvidence(
-            request.Message,
-            limit: 5,
-            slugFilter: request.Slug);
-
-        var relevantChunks = candidateChunks
-            .Where(chunk => chunk.Score > 0)
-            .ToList();
+        var relevantChunks = FindVerifiedChunks(request);
 
         if (relevantChunks.Count == 0)
         {
@@ -125,6 +112,19 @@ public sealed class AssistantService : IAssistantService
         }
 
         yield return AssistantStreamEvent.DoneEvent();
+    }
+
+    private List<AssistantEvidenceChunk> FindVerifiedChunks(AssistantChatRequest request)
+    {
+        var candidateChunks = _evidenceAdapter.SearchEvidence(
+            request.Message,
+            limit: 5,
+            slugFilter: request.Slug);
+
+        return candidateChunks
+            .Where(chunk => chunk.Score > 0 &&
+                string.Equals(chunk.EvidenceStatus, VerifiedEvidenceStatus, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
     private static void ValidateRequest(AssistantChatRequest request)

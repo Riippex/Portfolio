@@ -22,6 +22,9 @@ public sealed class AssistantServiceTests
         }
     }
 
+    private static AssistantService CreateService(StubEvidenceAdapter adapter) =>
+        new(adapter, new DeterministicGroundedSynthesizer(), new AssistantSafetyEvaluator());
+
     private static AssistantEvidenceChunk CreateChunk(
         string chunkId = "chunk-vextis-arch",
         string slug = "vextis",
@@ -29,7 +32,7 @@ public sealed class AssistantServiceTests
         string sectionHeading = "Architecture",
         string content = "Multi-agent autonomous workflow engine with deterministic state machines.",
         double score = 3.5,
-        string evidenceStatus = "pending",
+        string evidenceStatus = "verified",
         IReadOnlyList<string>? claims = null)
     {
         return new AssistantEvidenceChunk(
@@ -49,15 +52,22 @@ public sealed class AssistantServiceTests
             Citations: ["docs/evidence/projects/vextis.md#architecture"]);
     }
 
+    [Fact]
+    public void Constructor_requires_a_safety_evaluator()
+    {
+        var adapter = new StubEvidenceAdapter();
+
+        Assert.Throws<ArgumentNullException>(() =>
+            new AssistantService(adapter, new DeterministicGroundedSynthesizer(), null!));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("\t\n")]
     public void Chat_throws_on_empty_or_whitespace_message(string message)
     {
-        var adapter = new StubEvidenceAdapter();
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new StubEvidenceAdapter());
 
         Assert.Throws<ArgumentException>(() => service.Chat(new AssistantChatRequest(message)));
     }
@@ -65,9 +75,7 @@ public sealed class AssistantServiceTests
     [Fact]
     public void Chat_throws_on_null_request()
     {
-        var adapter = new StubEvidenceAdapter();
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new StubEvidenceAdapter());
 
         Assert.Throws<ArgumentNullException>(() => service.Chat(null!));
     }
@@ -75,9 +83,7 @@ public sealed class AssistantServiceTests
     [Fact]
     public void Chat_throws_on_oversized_message()
     {
-        var adapter = new StubEvidenceAdapter();
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new StubEvidenceAdapter());
 
         var oversized = new string('a', AssistantChatRequest.MaxMessageLength + 1);
 
@@ -87,9 +93,7 @@ public sealed class AssistantServiceTests
     [Fact]
     public void Chat_accepts_max_boundary_message_length()
     {
-        var adapter = new StubEvidenceAdapter();
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new StubEvidenceAdapter());
 
         var boundaryMessage = new string('a', AssistantChatRequest.MaxMessageLength);
 
@@ -104,9 +108,7 @@ public sealed class AssistantServiceTests
     [InlineData("-starts-with-hyphen")]
     public void Chat_throws_on_invalid_slug_filter(string invalidSlug)
     {
-        var adapter = new StubEvidenceAdapter();
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new StubEvidenceAdapter());
 
         Assert.Throws<ArgumentException>(() => service.Chat(new AssistantChatRequest("hello", invalidSlug)));
     }
@@ -114,9 +116,7 @@ public sealed class AssistantServiceTests
     [Fact]
     public void Chat_throws_on_oversized_slug_filter()
     {
-        var adapter = new StubEvidenceAdapter();
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new StubEvidenceAdapter());
 
         var oversizedSlug = new string('a', AssistantChatRequest.MaxSlugLength + 1);
 
@@ -124,14 +124,13 @@ public sealed class AssistantServiceTests
     }
 
     [Fact]
-    public void Chat_returns_grounded_response_with_citations_when_evidence_matches()
+    public void Chat_returns_grounded_response_with_citations_when_verified_evidence_matches()
     {
         var adapter = new StubEvidenceAdapter
         {
             ChunksToReturn = [CreateChunk()]
         };
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(adapter);
 
         var response = service.Chat(new AssistantChatRequest("Tell me about Vextis architecture"));
 
@@ -142,7 +141,7 @@ public sealed class AssistantServiceTests
         Assert.Equal("vextis", citation.Slug);
         Assert.Equal("Vextis Architecture", citation.Title);
         Assert.Equal("Architecture", citation.SectionHeading);
-        Assert.Equal("pending", citation.EvidenceStatus);
+        Assert.Equal("verified", citation.EvidenceStatus);
         Assert.Equal("2026.09", citation.Version);
         Assert.Contains("claim-vextis-01", citation.Claims);
     }
@@ -150,12 +149,7 @@ public sealed class AssistantServiceTests
     [Fact]
     public void Chat_returns_not_documented_when_no_evidence_matches()
     {
-        var adapter = new StubEvidenceAdapter
-        {
-            ChunksToReturn = []
-        };
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(new StubEvidenceAdapter());
 
         var response = service.Chat(new AssistantChatRequest("Quantum baking recipes"));
 
@@ -171,8 +165,7 @@ public sealed class AssistantServiceTests
         {
             ChunksToReturn = [CreateChunk(score: 0.0)]
         };
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(adapter);
 
         var response = service.Chat(new AssistantChatRequest("Unmatched query"));
 
@@ -181,28 +174,46 @@ public sealed class AssistantServiceTests
     }
 
     [Fact]
-    public void Chat_preserves_pending_status_for_unverified_evidence()
+    public void Chat_returns_not_documented_when_only_pending_evidence_matches()
     {
         var adapter = new StubEvidenceAdapter
         {
             ChunksToReturn = [CreateChunk(evidenceStatus: "pending")]
         };
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(adapter);
 
         var response = service.Chat(new AssistantChatRequest("Vextis status"));
 
+        Assert.Equal(AssistantGroundingStatus.NotDocumented, response.GroundingStatus);
+        Assert.Empty(response.Citations);
+    }
+
+    [Fact]
+    public void Chat_cites_only_verified_chunks_when_evidence_is_mixed()
+    {
+        var adapter = new StubEvidenceAdapter
+        {
+            ChunksToReturn =
+            [
+                CreateChunk("chunk-pending", evidenceStatus: "pending"),
+                CreateChunk("chunk-verified", evidenceStatus: "verified")
+            ]
+        };
+        var service = CreateService(adapter);
+
+        var response = service.Chat(new AssistantChatRequest("Vextis architecture"));
+
         Assert.Equal(AssistantGroundingStatus.Grounded, response.GroundingStatus);
         var citation = Assert.Single(response.Citations);
-        Assert.Equal("pending", citation.EvidenceStatus);
+        Assert.Equal("chunk-verified", citation.ChunkId);
+        Assert.Equal("verified", citation.EvidenceStatus);
     }
 
     [Fact]
     public void Chat_passes_slug_filter_to_adapter()
     {
         var adapter = new StubEvidenceAdapter();
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(adapter);
 
         service.Chat(new AssistantChatRequest("autonomous systems", "vextis"));
 
@@ -224,8 +235,7 @@ public sealed class AssistantServiceTests
                 CreateChunk("chunk-5", "s5", "T5", "Sec5", "Content 5", 1.0)
             ]
         };
-        var synthesizer = new DeterministicGroundedSynthesizer();
-        var service = new AssistantService(adapter, synthesizer);
+        var service = CreateService(adapter);
 
         var response = service.Chat(new AssistantChatRequest("multi chunk query"));
 

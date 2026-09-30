@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using Rafael.Portfolio.Modules.Assistant.Infrastructure;
 
 namespace Rafael.Portfolio.UnitTests;
@@ -56,5 +57,59 @@ public sealed class AssistantRateLimiterTests
     {
         var limiter = new InMemorySlidingWindowRateLimiter(limit: 5);
         Assert.Throws<ArgumentException>(() => limiter.TryAcquire(invalidKey, out _));
+    }
+
+    [Fact]
+    public void Expired_timestamps_free_the_client_budget_after_the_window()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 2, window: TimeSpan.FromSeconds(60), timeProvider: time);
+
+        Assert.True(limiter.TryAcquire("client-1", out _));
+        Assert.True(limiter.TryAcquire("client-1", out _));
+        Assert.False(limiter.TryAcquire("client-1", out _));
+
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.True(limiter.TryAcquire("client-1", out _));
+        Assert.True(limiter.TryAcquire("client-1", out _));
+        Assert.False(limiter.TryAcquire("client-1", out _));
+    }
+
+    [Fact]
+    public void Expired_client_entries_are_removed_from_memory()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, window: TimeSpan.FromSeconds(60), timeProvider: time);
+
+        limiter.TryAcquire("stale-client", out _);
+        Assert.Equal(1, limiter.TrackedClientCount);
+
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        limiter.TryAcquire("fresh-client", out _);
+
+        Assert.Equal(1, limiter.TrackedClientCount);
+    }
+
+    [Fact]
+    public void Rotated_client_keys_do_not_grow_memory_permanently()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 10, window: TimeSpan.FromSeconds(60), timeProvider: time);
+
+        for (var round = 0; round < 5; round++)
+        {
+            for (var i = 0; i < 50; i++)
+            {
+                Assert.True(limiter.TryAcquire($"spoofed-key-{round}-{i}", out _));
+            }
+
+            time.Advance(TimeSpan.FromSeconds(61));
+        }
+
+        limiter.TryAcquire("final-client", out _);
+
+        Assert.True(limiter.TrackedClientCount <= 51);
     }
 }

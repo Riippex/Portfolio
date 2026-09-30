@@ -21,10 +21,23 @@ builder.Services.AddSingleton<IEvidenceRetriever>(sp =>
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IAssistantSafetyEvaluator, AssistantSafetyEvaluator>();
 builder.Services.AddSingleton<IAssistantRateLimiter>(_ => new InMemorySlidingWindowRateLimiter(10, TimeSpan.FromSeconds(60)));
+
+var turnstileSecret = builder.Configuration["Turnstile:SecretKey"];
+var turnstileBypassAllowed = builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Test");
+
+if (string.IsNullOrWhiteSpace(turnstileSecret) && !turnstileBypassAllowed)
+{
+    throw new InvalidOperationException(
+        "Turnstile:SecretKey must be configured outside Development/Test environments. " +
+        "Human verification fails closed rather than running unprotected.");
+}
+
 builder.Services.AddSingleton<ITurnstileValidator>(sp =>
-    new CloudflareTurnstileValidator(
-        sp.GetRequiredService<IHttpClientFactory>().CreateClient(),
-        builder.Configuration["Turnstile:SecretKey"]));
+    string.IsNullOrWhiteSpace(turnstileSecret)
+        ? new DisabledTurnstileValidator()
+        : new CloudflareTurnstileValidator(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient("turnstile"),
+            turnstileSecret));
 builder.Services.AddSingleton<IAssistantEvidenceAdapter, KnowledgeAssistantEvidenceAdapter>();
 builder.Services.AddSingleton<IAssistantSynthesizer, DeterministicGroundedSynthesizer>();
 builder.Services.AddSingleton<IAssistantService, AssistantService>();

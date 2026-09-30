@@ -25,11 +25,12 @@ public static class AssistantEndpoints
             IAssistantService assistantService,
             IAssistantRateLimiter rateLimiter,
             ITurnstileValidator turnstileValidator,
+            IConfiguration configuration,
             ILoggerFactory loggerFactory) =>
         {
             var logger = loggerFactory.CreateLogger("Rafael.Portfolio.Assistant");
             var stopwatch = Stopwatch.StartNew();
-            var clientKey = GetClientKey(httpContext);
+            var clientKey = GetClientKey(httpContext, configuration);
 
             if (!rateLimiter.TryAcquire(clientKey, out var retryAfter))
             {
@@ -97,11 +98,12 @@ public static class AssistantEndpoints
             IAssistantService assistantService,
             IAssistantRateLimiter rateLimiter,
             ITurnstileValidator turnstileValidator,
+            IConfiguration configuration,
             ILoggerFactory loggerFactory) =>
         {
             var logger = loggerFactory.CreateLogger("Rafael.Portfolio.Assistant");
             var stopwatch = Stopwatch.StartNew();
-            var clientKey = GetClientKey(httpContext);
+            var clientKey = GetClientKey(httpContext, configuration);
 
             if (!rateLimiter.TryAcquire(clientKey, out var retryAfter))
             {
@@ -204,8 +206,15 @@ public static class AssistantEndpoints
         return api;
     }
 
-    private static string GetClientKey(HttpContext context)
+    private static string GetClientKey(HttpContext context, IConfiguration configuration)
     {
+        var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+        if (!IsTrustedProxy(remoteIp, configuration))
+        {
+            return remoteIp;
+        }
+
         var cfConnectingIp = context.Request.Headers["CF-Connecting-IP"].FirstOrDefault();
         if (!string.IsNullOrWhiteSpace(cfConnectingIp))
         {
@@ -222,7 +231,16 @@ public static class AssistantEndpoints
             }
         }
 
-        return context.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+        return remoteIp;
+    }
+
+    private static bool IsTrustedProxy(string remoteIp, IConfiguration configuration)
+    {
+        var trustedProxies = configuration
+            .GetSection("AssistantSecurity:TrustedProxies")
+            .Get<string[]>() ?? [];
+
+        return trustedProxies.Contains(remoteIp, StringComparer.Ordinal);
     }
 
     private static string HashClientKey(string key)

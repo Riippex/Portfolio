@@ -36,7 +36,11 @@ public sealed class PublishedBackendSmokeTests
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                Environment = { ["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}" }
+                Environment =
+                {
+                    ["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}",
+                    ["ASPNETCORE_ENVIRONMENT"] = "Development"
+                }
             }) ?? throw new InvalidOperationException("Failed to start the published backend.");
 
             using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
@@ -113,18 +117,17 @@ public sealed class PublishedBackendSmokeTests
                 new Uri("/v1/evidence/search?q=agents&slug=Invalid_Slug!!", UriKind.Relative));
             Assert.Equal(HttpStatusCode.BadRequest, invalidSlugSearch.StatusCode);
 
-            using var chatGrounded = await http.PostAsync(
+            using var chatPendingEvidence = await http.PostAsync(
                 new Uri("/v1/assistant/chat", UriKind.Relative),
                 new StringContent(
                     JsonSerializer.Serialize(new { message = "Tell me about autonomous agents" }),
                     System.Text.Encoding.UTF8,
                     "application/json"));
-            Assert.Equal(HttpStatusCode.OK, chatGrounded.StatusCode);
-            using var chatGroundedJson = JsonDocument.Parse(await chatGrounded.Content.ReadAsStringAsync());
-            Assert.Equal("grounded", chatGroundedJson.RootElement.GetProperty("groundingStatus").GetString());
-            Assert.NotEmpty(chatGroundedJson.RootElement.GetProperty("answer").GetString()!);
-            var chatCitations = chatGroundedJson.RootElement.GetProperty("citations").EnumerateArray().ToArray();
-            Assert.NotEmpty(chatCitations);
+            Assert.Equal(HttpStatusCode.OK, chatPendingEvidence.StatusCode);
+            using var chatPendingJson = JsonDocument.Parse(await chatPendingEvidence.Content.ReadAsStringAsync());
+            Assert.Equal("not_documented", chatPendingJson.RootElement.GetProperty("groundingStatus").GetString());
+            Assert.NotEmpty(chatPendingJson.RootElement.GetProperty("answer").GetString()!);
+            Assert.Empty(chatPendingJson.RootElement.GetProperty("citations").EnumerateArray().ToArray());
 
             using var chatUndocumented = await http.PostAsync(
                 new Uri("/v1/assistant/chat", UriKind.Relative),
@@ -175,6 +178,8 @@ public sealed class PublishedBackendSmokeTests
             Assert.Contains("event: status", streamContent);
             Assert.Contains("event: token", streamContent);
             Assert.Contains("event: done", streamContent);
+            Assert.Contains("not_documented", streamContent);
+            Assert.DoesNotContain("event: citation", streamContent);
 
             // Test prompt injection safety neutralization
             using var attackResponse = await http.PostAsync(
@@ -188,6 +193,58 @@ public sealed class PublishedBackendSmokeTests
             Assert.Equal("not_documented", attackJson.RootElement.GetProperty("groundingStatus").GetString());
             Assert.Contains("grounded strictly in Rafael's public, verified portfolio", attackJson.RootElement.GetProperty("answer").GetString()!);
             Assert.Empty(attackJson.RootElement.GetProperty("citations").EnumerateArray().ToArray());
+
+            // Rotating spoofed identity headers must not bypass the shared
+            // per-connection rate-limit bucket (7 assistant calls already made).
+            for (var attempt = 8; attempt <= 10; attempt++)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/assistant/chat", UriKind.Relative));
+                request.Headers.TryAddWithoutValidation("CF-Connecting-IP", $"203.0.113.{attempt}");
+                request.Headers.TryAddWithoutValidation("X-Forwarded-For", $"198.51.100.{attempt}");
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(new { message = "Tell me about autonomous agents" }),
+                    System.Text.Encoding.UTF8,
+                    "application/json");
+
+                using var rotated = await http.SendAsync(request);
+                Assert.Equal(HttpStatusCode.OK, rotated.StatusCode);
+            }
+
+            using var bypassAttempt = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/assistant/chat", UriKind.Relative));
+            bypassAttempt.Headers.TryAddWithoutValidation("CF-Connecting-IP", "203.0.113.250");
+            bypassAttempt.Headers.TryAddWithoutValidation("X-Forwarded-For", "198.51.100.250");
+            bypassAttempt.Content = new StringContent(
+                JsonSerializer.Serialize(new { message = "Tell me about autonomous agents" }),
+                System.Text.Encoding.UTF8,
+                "application/json");
+
+            using var rejected = await http.SendAsync(bypassAttempt);
+            Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+            Assert.True(rejected.Headers.Contains("Retry-After"));
+
+            // Production without a Turnstile secret must fail startup instead of
+            // running unprotected.
+            using var productionHost = Process.Start(new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"\"{Path.Combine(publishDir, "Rafael.Portfolio.Web.dll")}\"",
+                WorkingDirectory = publishDir,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                Environment =
+                {
+                    ["ASPNETCORE_URLS"] = $"http://127.0.0.1:{GetFreePort()}",
+                    ["ASPNETCORE_ENVIRONMENT"] = "Production",
+                    ["Turnstile__SecretKey"] = ""
+                }
+            }) ?? throw new InvalidOperationException("Failed to start the production probe.");
+
+            var exited = productionHost.WaitForExit(milliseconds: 30000);
+            var startupError = await productionHost.StandardError.ReadToEndAsync();
+            Assert.True(exited, "Production host without Turnstile secret should fail startup.");
+            Assert.NotEqual(0, productionHost.ExitCode);
+            Assert.Contains("Turnstile", startupError);
         }
         finally
         {

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useTransition } from "react";
 import type { AssistantChatMessage, AssistantCitation, AssistantGroundingStatus } from "../model";
 import { streamAssistantChat } from "../api";
+import { buildAssistantChatRequest } from "../turnstile";
 import Link from "next/link";
 
 const INITIAL_MESSAGES: readonly AssistantChatMessage[] = [
@@ -11,7 +12,6 @@ const INITIAL_MESSAGES: readonly AssistantChatMessage[] = [
     role: "assistant",
     content:
       "I am Rafael AI, an interactive portfolio assistant grounded exclusively in versioned public evidence. Ask about Rafael's systems, focus areas, or architecture patterns.",
-    groundingStatus: "grounded",
   },
 ];
 
@@ -38,7 +38,7 @@ export function AssistantChat() {
     }
   }, [messages]);
 
-  const handleSendMessage = (textToSend: string) => {
+  const handleSendMessage = async (textToSend: string) => {
     const trimmed = textToSend.trim();
     if (!trimmed || isStreaming) {
       return;
@@ -74,8 +74,10 @@ export function AssistantChat() {
     let accumulatedStatus: AssistantGroundingStatus = "grounded";
     const accumulatedCitations: AssistantCitation[] = [];
 
+    const requestBody = await buildAssistantChatRequest(trimmed);
+
     streamAssistantChat(
-      { message: trimmed },
+      requestBody,
       {
         onStatus: (status) => {
           accumulatedStatus = status;
@@ -237,7 +239,7 @@ export function AssistantChat() {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask a question about Rafael's verified work (max 500 chars)..."
+          placeholder="Ask about Rafael's documented systems and evidence (max 500 chars)..."
           maxLength={500}
           disabled={isStreaming}
           aria-label="Your question"
