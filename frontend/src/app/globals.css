@@ -54,12 +54,34 @@ a { color: inherit; text-decoration: none; }
 .assistant-bar { display:flex; justify-content:space-between; padding:4px 4px 20px; border-bottom:1px solid rgba(255,255,255,.14); color:#919086; font:11px monospace; text-transform:uppercase; letter-spacing:.14em; }
 .assistant-bar span:first-child::before { content:""; display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:var(--acid); }
 .terminal { min-height:330px; padding:56px 5vw; display:grid; align-content:center; gap:28px; }
+.assistant-terminal-scroll { max-height:420px; overflow-y:auto; align-content:flex-start; scroll-behavior:smooth; }
+.assistant-terminal-scroll::-webkit-scrollbar { width:6px; }
+.assistant-terminal-scroll::-webkit-scrollbar-thumb { background:rgba(255,255,255,.2); border-radius:3px; }
 .terminal-line { display:grid; grid-template-columns:84px 1fr; gap:24px; max-width:850px; font:15px/1.7 monospace; }
 .terminal-line .label { color:var(--acid); text-transform:uppercase; font-size:11px; padding-top:5px; }
 .terminal-line.answer { color:#c5c3b9; }
 .terminal-line.answer strong { color:white; }
+.message-body { display:flex; flex-direction:column; gap:8px; }
+.stream-cursor { display:inline-block; color:var(--acid); margin-left:3px; animation:blink 0.8s infinite; }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+.grounding-badge-row { margin-top:4px; }
+.citations-list { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; padding-top:8px; border-top:1px dashed rgba(255,255,255,.15); }
+.citations-label { font:11px monospace; color:var(--muted); text-transform:uppercase; }
+.citation-chip { display:inline-flex; align-items:center; gap:6px; padding:2px 8px; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:2px; font:12px monospace; }
+.citation-link { color:#e2e8f0; text-decoration:underline; text-underline-offset:2px; }
+.citation-link:hover { color:var(--acid); }
+.assistant-error-banner { margin-top:12px; padding:10px 14px; background:rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.4); color:#fca5a5; font:12px monospace; display:flex; justify-content:space-between; align-items:center; }
+.error-dismiss { background:transparent; border:0; color:#fca5a5; cursor:pointer; font-size:14px; padding:0 4px; }
 .assistant-actions { display:flex; flex-wrap:wrap; gap:9px; padding-top:22px; border-top:1px solid rgba(255,255,255,.14); }
-.assistant-actions button { border:1px solid rgba(255,255,255,.2); background:transparent; color:#aaa89e; padding:10px 13px; font:11px monospace; cursor:not-allowed; }
+.assistant-actions button { border:1px solid rgba(255,255,255,.2); background:transparent; color:#aaa89e; padding:10px 13px; font:11px monospace; cursor:pointer; transition:border-color .2s,color .2s; }
+.assistant-actions button:hover:not(:disabled) { border-color:var(--acid); color:white; }
+.assistant-actions button:disabled { cursor:not-allowed; opacity:.5; }
+.assistant-input-row { display:flex; gap:12px; margin-top:18px; align-items:center; flex-wrap:wrap; }
+.assistant-input-row input { flex:1; min-width:260px; height:48px; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.2); color:white; padding:0 16px; font:14px monospace; outline:none; transition:border-color .2s; }
+.assistant-input-row input:focus { border-color:var(--acid); }
+.assistant-input-row input:disabled { opacity:.6; cursor:not-allowed; }
+.input-meta { display:flex; align-items:center; gap:12px; }
+.char-count { font:11px monospace; color:#88867d; min-width:50px; text-align:right; }
 .footer { min-height:120px; border-top:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; color:var(--muted); font:11px monospace; text-transform:uppercase; letter-spacing:.1em; }
 .status-banner { padding:36px 0; border-bottom:1px solid var(--line); color:var(--muted); font:13px/1.6 monospace; }
 .status-banner strong { display:block; color:var(--ink); margin-bottom:6px; font-size:14px; text-transform:uppercase; letter-spacing:.08em; }

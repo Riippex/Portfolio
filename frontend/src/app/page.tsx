@@ -1,4 +1,4 @@
-import { AssistantPreview } from "@/modules/assistant/components/assistant-preview";
+import { AssistantChat } from "@/modules/assistant/components/assistant-chat";
 import { getProfile, getSelectedProjects } from "@/modules/portfolio/api";
 import Link from "next/link";
 
@@ -99,7 +99,7 @@ export default async function Home() {
           <div><span className="kicker">The interactive layer</span><h2>Meet Rafael AI.</h2></div>
           <p>A grounded portfolio agent designed to cite its claims and admit when evidence is missing.</p>
         </div>
-        <AssistantPreview />
+        <AssistantChat />
       </section>
 
       <footer className="shell footer">

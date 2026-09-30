@@ -18,6 +18,13 @@ builder.Services.AddSingleton<IEvidenceSource>(_ => FileSystemEvidenceSource.Fro
     ?? FileSystemEvidenceSource.BundledManifestPath));
 builder.Services.AddSingleton<IEvidenceRetriever>(sp =>
     new InMemoryLexicalEvidenceRetriever(sp.GetRequiredService<IEvidenceSource>()));
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IAssistantSafetyEvaluator, AssistantSafetyEvaluator>();
+builder.Services.AddSingleton<IAssistantRateLimiter>(_ => new InMemorySlidingWindowRateLimiter(10, TimeSpan.FromSeconds(60)));
+builder.Services.AddSingleton<ITurnstileValidator>(sp =>
+    new CloudflareTurnstileValidator(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient(),
+        builder.Configuration["Turnstile:SecretKey"]));
 builder.Services.AddSingleton<IAssistantEvidenceAdapter, KnowledgeAssistantEvidenceAdapter>();
 builder.Services.AddSingleton<IAssistantSynthesizer, DeterministicGroundedSynthesizer>();
 builder.Services.AddSingleton<IAssistantService, AssistantService>();
