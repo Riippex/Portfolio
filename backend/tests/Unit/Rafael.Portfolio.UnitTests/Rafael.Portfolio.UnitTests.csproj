@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Modules\Portfolio\Rafael.Portfolio.Modules.Portfolio\Rafael.Portfolio.Modules.Portfolio.csproj" />
     <ProjectReference Include="..\..\..\src\Modules\Knowledge\Rafael.Portfolio.Modules.Knowledge\Rafael.Portfolio.Modules.Knowledge.csproj" />
+    <ProjectReference Include="..\..\..\src\Modules\Assistant\Rafael.Portfolio.Modules.Assistant\Rafael.Portfolio.Modules.Assistant.csproj" />
   </ItemGroup>
 
 </Project>

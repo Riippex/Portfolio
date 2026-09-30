@@ -112,6 +112,55 @@ public sealed class PublishedBackendSmokeTests
             using var invalidSlugSearch = await http.GetAsync(
                 new Uri("/v1/evidence/search?q=agents&slug=Invalid_Slug!!", UriKind.Relative));
             Assert.Equal(HttpStatusCode.BadRequest, invalidSlugSearch.StatusCode);
+
+            using var chatGrounded = await http.PostAsync(
+                new Uri("/v1/assistant/chat", UriKind.Relative),
+                new StringContent(
+                    JsonSerializer.Serialize(new { message = "Tell me about autonomous agents" }),
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            Assert.Equal(HttpStatusCode.OK, chatGrounded.StatusCode);
+            using var chatGroundedJson = JsonDocument.Parse(await chatGrounded.Content.ReadAsStringAsync());
+            Assert.Equal("grounded", chatGroundedJson.RootElement.GetProperty("groundingStatus").GetString());
+            Assert.NotEmpty(chatGroundedJson.RootElement.GetProperty("answer").GetString()!);
+            var chatCitations = chatGroundedJson.RootElement.GetProperty("citations").EnumerateArray().ToArray();
+            Assert.NotEmpty(chatCitations);
+
+            using var chatUndocumented = await http.PostAsync(
+                new Uri("/v1/assistant/chat", UriKind.Relative),
+                new StringContent(
+                    JsonSerializer.Serialize(new { message = "Quantum baking recipes with pineapple" }),
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            Assert.Equal(HttpStatusCode.OK, chatUndocumented.StatusCode);
+            using var chatUndocumentedJson = JsonDocument.Parse(await chatUndocumented.Content.ReadAsStringAsync());
+            Assert.Equal("not_documented", chatUndocumentedJson.RootElement.GetProperty("groundingStatus").GetString());
+            Assert.Empty(chatUndocumentedJson.RootElement.GetProperty("citations").EnumerateArray().ToArray());
+
+            using var chatEmpty = await http.PostAsync(
+                new Uri("/v1/assistant/chat", UriKind.Relative),
+                new StringContent(
+                    JsonSerializer.Serialize(new { message = "" }),
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            Assert.Equal(HttpStatusCode.BadRequest, chatEmpty.StatusCode);
+
+            var oversizedMessage = new string('a', 501);
+            using var chatOversized = await http.PostAsync(
+                new Uri("/v1/assistant/chat", UriKind.Relative),
+                new StringContent(
+                    JsonSerializer.Serialize(new { message = oversizedMessage }),
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            Assert.Equal(HttpStatusCode.BadRequest, chatOversized.StatusCode);
+
+            using var chatInvalidSlug = await http.PostAsync(
+                new Uri("/v1/assistant/chat", UriKind.Relative),
+                new StringContent(
+                    JsonSerializer.Serialize(new { message = "agents", slug = "Invalid_Slug!!" }),
+                    System.Text.Encoding.UTF8,
+                    "application/json"));
+            Assert.Equal(HttpStatusCode.BadRequest, chatInvalidSlug.StatusCode);
         }
         finally
         {
