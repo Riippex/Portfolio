@@ -11,11 +11,26 @@ namespace Rafael.Portfolio.Web.Endpoints;
 
 public static class AssistantEndpoints
 {
+    private const int MaxVisitorIdLength = 128;
+    private const string FallbackKeyMaterial = "rafael-portfolio-development-rate-limit-key";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
+
+    internal enum ClientIdentityStatus
+    {
+        ValidSigned,
+        Absent,
+        Invalid
+    }
+
+    internal sealed record ClientIdentity(
+        ClientIdentityStatus Status,
+        string? RateLimitKey,
+        string? TurnstileRemoteIp);
 
     public static RouteGroupBuilder MapAssistantEndpoints(this RouteGroupBuilder api)
     {
@@ -26,13 +41,19 @@ public static class AssistantEndpoints
             IAssistantRateLimiter rateLimiter,
             ITurnstileValidator turnstileValidator,
             IConfiguration configuration,
+            IHostEnvironment environment,
             ILoggerFactory loggerFactory) =>
         {
             var logger = loggerFactory.CreateLogger("Rafael.Portfolio.Assistant");
             var stopwatch = Stopwatch.StartNew();
-            var (clientKey, turnstileRemoteIp) = ResolveClientIdentity(httpContext, configuration);
 
-            if (!rateLimiter.TryAcquire(clientKey, out var retryAfter))
+            var identityError = ValidateIdentity(httpContext, configuration, environment, out var identity);
+            if (identityError is not null)
+            {
+                return Results.Json(new { error = identityError }, statusCode: StatusCodes.Status403Forbidden);
+            }
+
+            if (!rateLimiter.TryAcquire(identity!.RateLimitKey!, out var retryAfter))
             {
                 httpContext.Response.Headers.RetryAfter = Math.Ceiling(retryAfter.TotalSeconds).ToString();
                 return Results.Json(
@@ -42,7 +63,7 @@ public static class AssistantEndpoints
 
             var turnstileValid = await turnstileValidator.ValidateAsync(
                 request?.TurnstileToken,
-                turnstileRemoteIp,
+                identity.TurnstileRemoteIp,
                 httpContext.RequestAborted);
 
             if (!turnstileValid)
@@ -81,7 +102,7 @@ public static class AssistantEndpoints
             // Bounded observability: log metadata only, never raw user message or answer text
             logger.LogInformation(
                 "AssistantChat completed: ClientHash={ClientHash}, QueryLength={Length}, Status={Status}, Citations={CitationCount}, LatencyMs={LatencyMs}",
-                HashClientKey(clientKey),
+                HashClientKey(identity.RateLimitKey!),
                 request.Message.Length,
                 response.GroundingStatus,
                 response.Citations.Count,
@@ -99,13 +120,24 @@ public static class AssistantEndpoints
             IAssistantRateLimiter rateLimiter,
             ITurnstileValidator turnstileValidator,
             IConfiguration configuration,
+            IHostEnvironment environment,
             ILoggerFactory loggerFactory) =>
         {
             var logger = loggerFactory.CreateLogger("Rafael.Portfolio.Assistant");
             var stopwatch = Stopwatch.StartNew();
-            var (clientKey, turnstileRemoteIp) = ResolveClientIdentity(httpContext, configuration);
 
-            if (!rateLimiter.TryAcquire(clientKey, out var retryAfter))
+            var identityError = ValidateIdentity(httpContext, configuration, environment, out var identity);
+            if (identityError is not null)
+            {
+                httpContext.Response.StatusCode = StatusCodes.Status403Forbidden;
+                httpContext.Response.ContentType = "application/json";
+                await httpContext.Response.WriteAsJsonAsync(
+                    new { error = identityError },
+                    cancellationToken: httpContext.RequestAborted);
+                return;
+            }
+
+            if (!rateLimiter.TryAcquire(identity!.RateLimitKey!, out var retryAfter))
             {
                 httpContext.Response.Headers.RetryAfter = Math.Ceiling(retryAfter.TotalSeconds).ToString();
                 httpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
@@ -118,7 +150,7 @@ public static class AssistantEndpoints
 
             var turnstileValid = await turnstileValidator.ValidateAsync(
                 request?.TurnstileToken,
-                turnstileRemoteIp,
+                identity.TurnstileRemoteIp,
                 httpContext.RequestAborted);
 
             if (!turnstileValid)
@@ -194,7 +226,7 @@ public static class AssistantEndpoints
             // Bounded observability: log stream metadata only
             logger.LogInformation(
                 "AssistantStream completed: ClientHash={ClientHash}, QueryLength={Length}, Status={Status}, Citations={CitationCount}, LatencyMs={LatencyMs}",
-                HashClientKey(clientKey),
+                HashClientKey(identity.RateLimitKey!),
                 request.Message.Length,
                 groundingStatus,
                 citationCount,
@@ -206,31 +238,99 @@ public static class AssistantEndpoints
         return api;
     }
 
-    private const int MaxClientKeyLength = 128;
-
-    private static (string RateLimitKey, string TurnstileRemoteIp) ResolveClientIdentity(
+    internal static string? ValidateIdentity(
         HttpContext context,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHostEnvironment environment,
+        out ClientIdentity? identity)
     {
-        var connectionIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        identity = null;
+        var status = ResolveIdentityStatus(context, configuration, out var visitorId, out var identitySecret);
 
-        var visitorId = GetSignedVisitorId(context, configuration, out var identitySecret);
-        if (visitorId is not null)
+        if (status is ClientIdentityStatus.Invalid)
+        {
+            return "Client identity signature is incomplete, oversized, or invalid.";
+        }
+
+        if (status is ClientIdentityStatus.ValidSigned)
         {
             // The raw visitor id leaves the process only inside this request's
             // Turnstile verification; the rate-limit key is an opaque HMAC
             // derivative that is never logged or reversible.
-            return ($"v:{ComputeProof(identitySecret!, $"ratelimit:{visitorId}")}", visitorId);
+            identity = new ClientIdentity(
+                status,
+                DeriveOpaqueKey(identitySecret, $"ratelimit:{visitorId}"),
+                visitorId);
+            return null;
         }
 
-        var key = connectionIp;
+        if (!environment.IsDevelopment() && !environment.IsEnvironment("Test"))
+        {
+            return "A signed client identity is required.";
+        }
+
+        identity = DerivePseudonymousFallback(context, configuration, identitySecret);
+        return null;
+    }
+
+    private static ClientIdentityStatus ResolveIdentityStatus(
+        HttpContext context,
+        IConfiguration configuration,
+        out string? visitorId,
+        out string? identitySecret)
+    {
+        visitorId = null;
+        identitySecret = configuration["AssistantSecurity:ProxyIdentitySecret"];
+
+        var asserted = context.Request.Headers["X-Client-Key"].FirstOrDefault();
+        var proof = context.Request.Headers["X-Client-Key-Proof"].FirstOrDefault();
+
+        if (string.IsNullOrWhiteSpace(asserted) && string.IsNullOrWhiteSpace(proof))
+        {
+            return ClientIdentityStatus.Absent;
+        }
+
+        if (string.IsNullOrWhiteSpace(asserted) ||
+            string.IsNullOrWhiteSpace(proof) ||
+            string.IsNullOrWhiteSpace(identitySecret))
+        {
+            return ClientIdentityStatus.Invalid;
+        }
+
+        var candidate = asserted.Trim();
+        if (candidate.Length > MaxVisitorIdLength)
+        {
+            return ClientIdentityStatus.Invalid;
+        }
+
+        var expected = ComputeProof(identitySecret, candidate);
+        var expectedBytes = Encoding.ASCII.GetBytes(expected);
+        var providedBytes = Encoding.ASCII.GetBytes(proof.Trim());
+
+        if (expectedBytes.Length == providedBytes.Length &&
+            CryptographicOperations.FixedTimeEquals(expectedBytes, providedBytes))
+        {
+            visitorId = candidate;
+            return ClientIdentityStatus.ValidSigned;
+        }
+
+        return ClientIdentityStatus.Invalid;
+    }
+
+    private static ClientIdentity DerivePseudonymousFallback(
+        HttpContext context,
+        IConfiguration configuration,
+        string? identitySecret)
+    {
+        var connectionIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var clientIp = connectionIp;
 
         if (IsTrustedProxy(connectionIp, configuration))
         {
             var cfConnectingIp = context.Request.Headers["CF-Connecting-IP"].FirstOrDefault();
             if (!string.IsNullOrWhiteSpace(cfConnectingIp))
             {
-                key = cfConnectingIp.Trim();
+                clientIp = cfConnectingIp.Trim();
             }
             else
             {
@@ -240,54 +340,22 @@ public static class AssistantEndpoints
                     var firstIp = xForwardedFor.Split(',')[0].Trim();
                     if (!string.IsNullOrEmpty(firstIp))
                     {
-                        key = firstIp;
+                        clientIp = firstIp;
                     }
                 }
             }
         }
 
-        return (key, key);
+        return new ClientIdentity(
+            ClientIdentityStatus.Absent,
+            DeriveOpaqueKey(identitySecret, $"connection:{clientIp}"),
+            clientIp);
     }
 
-    private static string? GetSignedVisitorId(
-        HttpContext context,
-        IConfiguration configuration,
-        out string? identitySecret)
+    internal static string DeriveOpaqueKey(string? secret, string subject)
     {
-        identitySecret = configuration["AssistantSecurity:ProxyIdentitySecret"];
-        if (string.IsNullOrWhiteSpace(identitySecret))
-        {
-            identitySecret = null;
-            return null;
-        }
-
-        var asserted = context.Request.Headers["X-Client-Key"].FirstOrDefault();
-        var proof = context.Request.Headers["X-Client-Key-Proof"].FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(asserted) || string.IsNullOrWhiteSpace(proof))
-        {
-            return null;
-        }
-
-        var visitorId = asserted.Trim();
-        if (visitorId.Length > MaxClientKeyLength)
-        {
-            return null;
-        }
-
-        var expected = ComputeProof(identitySecret, visitorId);
-        var expectedBytes = Encoding.ASCII.GetBytes(expected);
-        var providedBytes = Encoding.ASCII.GetBytes(proof.Trim());
-
-        return expectedBytes.Length == providedBytes.Length &&
-            CryptographicOperations.FixedTimeEquals(expectedBytes, providedBytes)
-            ? visitorId
-            : null;
-    }
-
-    private static string ComputeProof(string secret, string clientKey)
-    {
-        var bytes = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(clientKey));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
+        var keyMaterial = string.IsNullOrWhiteSpace(secret) ? FallbackKeyMaterial : secret;
+        return $"k:{ComputeProof(keyMaterial, subject)}";
     }
 
     private static bool IsTrustedProxy(string remoteIp, IConfiguration configuration)
@@ -297,6 +365,12 @@ public static class AssistantEndpoints
             .Get<string[]>() ?? [];
 
         return trustedProxies.Contains(remoteIp, StringComparer.Ordinal);
+    }
+
+    private static string ComputeProof(string secret, string subject)
+    {
+        var bytes = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(subject));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
     private static string HashClientKey(string key)
