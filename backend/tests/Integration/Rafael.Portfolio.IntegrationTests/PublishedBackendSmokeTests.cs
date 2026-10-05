@@ -1,6 +1,8 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -9,22 +11,31 @@ namespace Rafael.Portfolio.IntegrationTests;
 
 public sealed class PublishedBackendSmokeTests
 {
+    // One deadline bounds the whole smoke test; every stage below draws on it.
+    private static readonly TimeSpan OverallTimeout = TimeSpan.FromMinutes(8);
     private static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan HealthBudget = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan HealthAttemptTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan StartupProbeTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromSeconds(15);
+    private const int CaptureLimit = 4096;
 
     [Fact]
     public async Task Published_backend_serves_portfolio_endpoints_outside_the_checkout()
     {
         var root = FindRepositoryRoot();
         var publishDir = Path.Combine(Path.GetTempPath(), $"portfolio-publish-{Guid.NewGuid():N}");
-        var childProcesses = new List<Process>();
+        using var run = new SmokeRun();
+        Exception? failure = null;
 
         try
         {
             var webProject = Path.Combine(
                 root, "backend", "src", "Hosts", "Web", "Rafael.Portfolio.Web", "Rafael.Portfolio.Web.csproj");
-            Run("dotnet", $"publish \"{webProject}\" -c Release -o \"{publishDir}\"");
+            run.Stage = "publish";
+            await PublishAsync(run, webProject, publishDir);
 
+            run.Stage = "published artifact contents";
             var bundledManifest = Path.Combine(publishDir, "evidence", "inventory.json");
             Assert.True(File.Exists(bundledManifest), $"Published artifact is missing {bundledManifest}");
             var bundledProfile = Path.Combine(publishDir, "evidence", "profile.md");
@@ -32,17 +43,18 @@ public sealed class PublishedBackendSmokeTests
             var bundledVextis = Path.Combine(publishDir, "evidence", "projects", "vextis.md");
             Assert.True(File.Exists(bundledVextis), $"Published artifact is missing {bundledVextis}");
 
+            run.Stage = "development host startup";
             var port = GetFreePort();
-            var host = StartHost(childProcesses, publishDir, port, new Dictionary<string, string>
+            var host = StartHost(run, "development host", publishDir, port, new Dictionary<string, string>
             {
                 ["ASPNETCORE_ENVIRONMENT"] = "Development",
                 ["AssistantSecurity__ProxyIdentitySecret"] = "integration-proxy-secret"
-            }, out var hostDiagnostics);
+            });
 
-            using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
-            http.Timeout = HttpTimeout;
-            await WaitForHealthAsync(http, host, hostDiagnostics);
+            using var http = run.CreateClient(port);
+            await WaitForHealthAsync(run, http, host);
 
+            run.Stage = "public portfolio endpoints";
             using var projects = await http.GetAsync(new Uri("/v1/projects", UriKind.Relative));
             Assert.Equal(HttpStatusCode.OK, projects.StatusCode);
             using var projectsJson = JsonDocument.Parse(await projects.Content.ReadAsStringAsync());
@@ -141,6 +153,8 @@ public sealed class PublishedBackendSmokeTests
                     "application/json");
                 return request;
             }
+
+            run.Stage = "development assistant requests";
 
             // Identity rejections happen before rate limiting, so they hold on a
             // fresh, unexhausted bucket regardless of call order.
@@ -284,18 +298,19 @@ public sealed class PublishedBackendSmokeTests
 
             // A production host rejects unsigned and forged identities before any
             // rate limiting or Turnstile processing.
+            run.Stage = "production host startup";
             var productionPort = GetFreePort();
-            var productionAppHost = StartHost(childProcesses, publishDir, productionPort, new Dictionary<string, string>
+            var productionAppHost = StartHost(run, "production host", publishDir, productionPort, new Dictionary<string, string>
             {
                 ["ASPNETCORE_ENVIRONMENT"] = "Production",
                 ["Turnstile__SecretKey"] = "0x4AAAAAA_test_secret",
                 ["AssistantSecurity__ProxyIdentitySecret"] = "integration-proxy-secret"
-            }, out var productionDiagnostics);
+            });
 
-            using var productionHttp = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{productionPort}") };
-            productionHttp.Timeout = HttpTimeout;
-            await WaitForHealthAsync(productionHttp, productionAppHost, productionDiagnostics);
+            using var productionHttp = run.CreateClient(productionPort);
+            await WaitForHealthAsync(run, productionHttp, productionAppHost);
 
+            run.Stage = "production identity rejection";
             using (var unsigned = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/assistant/chat", UriKind.Relative)))
             {
                 unsigned.Content = new StringContent(
@@ -314,7 +329,8 @@ public sealed class PublishedBackendSmokeTests
 
             // Production without the Turnstile secret must fail startup instead of
             // running unprotected.
-            var turnstileProbeError = ExpectStartupFailure(childProcesses, publishDir, new Dictionary<string, string>
+            run.Stage = "startup probe without Turnstile secret";
+            var turnstileProbeError = await ExpectStartupFailureAsync(run, "Turnstile startup probe", publishDir, new Dictionary<string, string>
             {
                 ["ASPNETCORE_ENVIRONMENT"] = "Production",
                 ["Turnstile__SecretKey"] = "",
@@ -322,7 +338,8 @@ public sealed class PublishedBackendSmokeTests
             });
             Assert.Contains("Turnstile", turnstileProbeError);
 
-            var proxyProbeError = ExpectStartupFailure(childProcesses, publishDir, new Dictionary<string, string>
+            run.Stage = "startup probe without proxy identity secret";
+            var proxyProbeError = await ExpectStartupFailureAsync(run, "proxy identity startup probe", publishDir, new Dictionary<string, string>
             {
                 ["ASPNETCORE_ENVIRONMENT"] = "Production",
                 ["Turnstile__SecretKey"] = "0x4AAAAAA_test_secret",
@@ -330,23 +347,63 @@ public sealed class PublishedBackendSmokeTests
             });
             Assert.Contains("ProxyIdentitySecret", proxyProbeError);
         }
-        finally
+        catch (OperationCanceledException ex)
         {
-            foreach (var child in childProcesses)
-            {
-                StopAndAwait(child);
-            }
+            var cause = run.Token.IsCancellationRequested
+                ? $"the {OverallTimeout} overall deadline elapsed"
+                : "an operation timed out";
+            failure = new TimeoutException(
+                $"Smoke test stage '{run.Stage}' was cancelled after {run.Elapsed:mm\\:ss} because {cause}.\n{run.DescribeChildren()}",
+                ex);
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
 
-            try
+        // Cleanup always runs with its own bounded grace period so children are
+        // killed and awaited even after the overall deadline has elapsed.
+        var stuck = new List<string>();
+        foreach (var child in run.Children)
+        {
+            if (!await child.StopAndAwaitAsync(ProcessExitTimeout))
             {
-                Directory.Delete(publishDir, recursive: true);
+                stuck.Add(child.Name);
             }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
+        }
+
+        try
+        {
+            Directory.Delete(publishDir, recursive: true);
+        }
+        catch (DirectoryNotFoundException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        var cleanupFailure = stuck.Count == 0
+            ? null
+            : new InvalidOperationException(
+                $"Child processes did not exit within {ProcessExitTimeout}: {string.Join(", ", stuck)}.");
+
+        if (failure is not null && cleanupFailure is not null)
+        {
+            throw new AggregateException(failure, cleanupFailure);
+        }
+
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Throw(failure);
+        }
+
+        if (cleanupFailure is not null)
+        {
+            throw cleanupFailure;
         }
     }
 
@@ -358,22 +415,26 @@ public sealed class PublishedBackendSmokeTests
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
-    private static Process StartHost(
-        List<Process> childProcesses,
+    private static ChildProcess StartHost(
+        SmokeRun run,
+        string name,
         string publishDir,
         int port,
-        IReadOnlyDictionary<string, string> environment,
-        out StringBuilder diagnostics)
+        IReadOnlyDictionary<string, string> environment)
     {
-        diagnostics = new StringBuilder();
+        return run.Start(name, PublishedHostStartInfo(publishDir, port, environment));
+    }
+
+    private static ProcessStartInfo PublishedHostStartInfo(
+        string publishDir,
+        int port,
+        IReadOnlyDictionary<string, string> environment)
+    {
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
             Arguments = $"\"{Path.Combine(publishDir, "Rafael.Portfolio.Web.dll")}\"",
             WorkingDirectory = publishDir,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
             Environment = { ["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}" }
         };
 
@@ -382,95 +443,81 @@ public sealed class PublishedBackendSmokeTests
             startInfo.Environment[key] = value;
         }
 
-        var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start the published backend.");
-
-        childProcesses.Add(process);
-        Drain(process.StandardOutput, diagnostics);
-        Drain(process.StandardError, diagnostics);
-        return process;
+        return startInfo;
     }
 
-    private static void Drain(StreamReader reader, StringBuilder sink)
+    private static async Task PublishAsync(SmokeRun run, string webProject, string publishDir)
     {
-        _ = Task.Run(async () =>
+        var publish = run.Start("dotnet publish", new ProcessStartInfo
         {
-            try
-            {
-                var buffer = new char[1024];
-                int read;
-                while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                {
-                    lock (sink)
-                    {
-                        if (sink.Length < 8192)
-                        {
-                            sink.Append(buffer, 0, read);
-                        }
-                    }
-                }
-            }
-            catch (IOException)
-            {
-            }
-            catch (ObjectDisposedException)
-            {
-            }
+            FileName = "dotnet",
+            Arguments = $"publish \"{webProject}\" -c Release -o \"{publishDir}\""
         });
+
+        if (!await publish.WaitForExitAsync(run.Token))
+        {
+            run.Token.ThrowIfCancellationRequested();
+        }
+
+        Assert.True(publish.ExitCode == 0, $"dotnet publish exited with {publish.ExitCode}.\n{publish.Describe()}");
     }
 
-    private static string ExpectStartupFailure(
-        List<Process> childProcesses,
+    private static async Task<string> ExpectStartupFailureAsync(
+        SmokeRun run,
+        string name,
         string publishDir,
         IReadOnlyDictionary<string, string> environment)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            Arguments = $"\"{Path.Combine(publishDir, "Rafael.Portfolio.Web.dll")}\"",
-            WorkingDirectory = publishDir,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            Environment = { ["ASPNETCORE_URLS"] = $"http://127.0.0.1:{GetFreePort()}" }
-        };
+        var probe = run.Start(name, PublishedHostStartInfo(publishDir, GetFreePort(), environment));
 
-        foreach (var (key, value) in environment)
+        using var probeTimeout = CancellationTokenSource.CreateLinkedTokenSource(run.Token);
+        probeTimeout.CancelAfter(StartupProbeTimeout);
+        if (!await probe.WaitForExitAsync(probeTimeout.Token))
         {
-            startInfo.Environment[key] = value;
+            run.Token.ThrowIfCancellationRequested();
+            var stopped = await probe.StopAndAwaitAsync(ProcessExitTimeout);
+            throw new InvalidOperationException(
+                $"The {name} should fail startup but stayed alive for {StartupProbeTimeout} (stopped: {stopped}).\n{probe.Describe()}");
         }
 
-        using var probe = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start the production probe.");
-        childProcesses.Add(probe);
-
-        var exited = probe.WaitForExit(milliseconds: 30000);
-        if (!exited)
-        {
-            throw new InvalidOperationException("Production probe should fail startup but stayed alive.");
-        }
-
-        return probe.StandardError.ReadToEnd();
+        return probe.Stderr;
     }
 
-    private static void StopAndAwait(Process process)
+    private static async Task WaitForHealthAsync(SmokeRun run, HttpClient http, ChildProcess host)
     {
-        try
+        run.Stage = $"{host.Name} health";
+        var budget = Stopwatch.StartNew();
+        while (budget.Elapsed < HealthBudget)
         {
-            if (!process.HasExited)
+            run.Token.ThrowIfCancellationRequested();
+            if (host.HasExited)
             {
-                process.Kill(entireProcessTree: true);
+                throw new InvalidOperationException(
+                    $"The {host.Name} exited before becoming healthy.\n{host.Describe()}");
             }
 
-            process.WaitForExit((int)ProcessExitTimeout.TotalMilliseconds);
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(run.Token);
+            attempt.CancelAfter(HealthAttemptTimeout);
+            try
+            {
+                using var response = await http.GetAsync(new Uri("/health", UriKind.Relative), attempt.Token);
+                if (response.IsSuccessStatusCode)
+                {
+                    return;
+                }
+            }
+            catch (HttpRequestException)
+            {
+            }
+            catch (OperationCanceledException) when (!run.Token.IsCancellationRequested)
+            {
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(250), run.Token);
         }
-        catch (InvalidOperationException)
-        {
-        }
-        finally
-        {
-            process.Dispose();
-        }
+
+        throw new InvalidOperationException(
+            $"The {host.Name} did not become healthy within {HealthBudget}.\n{host.Describe()}");
     }
 
     private static string FindRepositoryRoot()
@@ -497,69 +544,196 @@ public sealed class PublishedBackendSmokeTests
         return port;
     }
 
-    private static void Run(string fileName, string arguments)
+    /// <summary>
+    /// Owns the single overall deadline, the active stage name, and every child
+    /// process the smoke test starts.
+    /// </summary>
+    private sealed class SmokeRun : IDisposable
     {
-        using var process = Process.Start(new ProcessStartInfo
+        private readonly CancellationTokenSource deadline = new(OverallTimeout);
+        private readonly Stopwatch clock = Stopwatch.StartNew();
+
+        public List<ChildProcess> Children { get; } = [];
+
+        public string Stage { get; set; } = "setup";
+
+        public CancellationToken Token => deadline.Token;
+
+        public TimeSpan Elapsed => clock.Elapsed;
+
+        public ChildProcess Start(string name, ProcessStartInfo startInfo)
         {
-            FileName = fileName,
-            Arguments = arguments,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        }) ?? throw new InvalidOperationException($"Failed to start '{fileName}'.");
+            var child = ChildProcess.Start(name, startInfo);
+            Children.Add(child);
+            return child;
+        }
 
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
+        public HttpClient CreateClient(int port)
+        {
+            return new HttpClient(new DeadlineHandler(Token) { InnerHandler = new HttpClientHandler() })
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{port}"),
+                Timeout = HttpTimeout
+            };
+        }
 
-        if (!process.WaitForExit((int)TimeSpan.FromMinutes(5).TotalMilliseconds))
+        public string DescribeChildren()
+        {
+            return string.Join("\n", Children.Select(child => child.Describe()));
+        }
+
+        public void Dispose()
+        {
+            deadline.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Links the overall deadline into every HTTP request, in addition to the
+    /// client's per-request timeout.
+    /// </summary>
+    private sealed class DeadlineHandler(CancellationToken deadline) : DelegatingHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline);
+            return await base.SendAsync(request, linked.Token);
+        }
+    }
+
+    /// <summary>
+    /// A child process whose stdout and stderr are drained from the moment it
+    /// starts, so a full pipe can never block it.
+    /// </summary>
+    private sealed class ChildProcess
+    {
+        private readonly Process process;
+        private readonly StringBuilder stdout = new();
+        private readonly StringBuilder stderr = new();
+        private readonly Task drains;
+        private bool disposed;
+
+        private ChildProcess(string name, Process process)
+        {
+            Name = name;
+            this.process = process;
+            drains = Task.WhenAll(
+                Task.Run(() => DrainAsync(process.StandardOutput, stdout)),
+                Task.Run(() => DrainAsync(process.StandardError, stderr)));
+        }
+
+        public string Name { get; }
+
+        public int? ExitCode { get; private set; }
+
+        public bool HasExited => disposed || process.HasExited;
+
+        public string Stderr => Snapshot(stderr);
+
+        public static ChildProcess Start(string name, ProcessStartInfo startInfo)
+        {
+            startInfo.UseShellExecute = false;
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+            var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException($"Failed to start the {name}.");
+            return new ChildProcess(name, process);
+        }
+
+        /// <summary>
+        /// Waits for exit and for both output drains; returns false when the
+        /// token is cancelled first.
+        /// </summary>
+        public async Task<bool> WaitForExitAsync(CancellationToken cancellationToken)
         {
             try
             {
-                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(cancellationToken);
+                await drains.WaitAsync(cancellationToken);
+                ExitCode = process.ExitCode;
+                return true;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Kills the entire process tree if needed, awaits exit and both drains,
+        /// then disposes. Returns whether exit completed within the grace period.
+        /// </summary>
+        public async Task<bool> StopAndAwaitAsync(TimeSpan grace)
+        {
+            if (disposed)
+            {
+                return true;
+            }
+
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
             }
             catch (InvalidOperationException)
             {
             }
+            catch (Win32Exception)
+            {
+            }
 
-            throw new InvalidOperationException($"'{fileName} {arguments}' timed out.");
+            using var timeout = new CancellationTokenSource(grace);
+            var exited = await WaitForExitAsync(timeout.Token);
+            if (exited)
+            {
+                disposed = true;
+                process.Dispose();
+            }
+
+            return exited;
         }
 
-        Assert.True(
-            process.ExitCode == 0,
-            $"'{fileName} {arguments}' exited with {process.ExitCode}.\n{stdout.Result}\n{stderr.Result}");
-    }
+        public string Describe()
+        {
+            var state = ExitCode is { } code ? $"exit code {code}" : HasExited ? "exited" : "running";
+            return $"[{Name}: {state}]\n--- stdout ---\n{Snapshot(stdout)}\n--- stderr ---\n{Snapshot(stderr)}";
+        }
 
-    private static async Task WaitForHealthAsync(HttpClient http, Process host, StringBuilder diagnostics)
-    {
-        for (var attempt = 0; attempt < 60; attempt++)
+        private static async Task DrainAsync(StreamReader reader, StringBuilder sink)
         {
             try
             {
-                using var response = await http.GetAsync(new Uri("/health", UriKind.Relative));
-                if (response.IsSuccessStatusCode)
+                var buffer = new char[1024];
+                int read;
+                while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
                 {
-                    return;
+                    lock (sink)
+                    {
+                        if (sink.Length < CaptureLimit)
+                        {
+                            sink.Append(buffer, 0, Math.Min(read, CaptureLimit - sink.Length));
+                        }
+                    }
                 }
             }
-            catch (HttpRequestException)
+            catch (IOException)
             {
             }
-
-            if (host.HasExited)
+            catch (ObjectDisposedException)
             {
-                break;
             }
-
-            await Task.Delay(1000);
         }
 
-        string captured;
-        lock (diagnostics)
+        private static string Snapshot(StringBuilder sink)
         {
-            captured = diagnostics.ToString();
+            lock (sink)
+            {
+                return sink.ToString();
+            }
         }
-
-        throw new InvalidOperationException(
-            $"The published backend did not become healthy in time. Host output:\n{captured}");
     }
 }
