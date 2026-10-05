@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Rafael.Portfolio.IntegrationTests;
@@ -39,7 +40,8 @@ public sealed class PublishedBackendSmokeTests
                 Environment =
                 {
                     ["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}",
-                    ["ASPNETCORE_ENVIRONMENT"] = "Development"
+                    ["ASPNETCORE_ENVIRONMENT"] = "Development",
+                    ["AssistantSecurity__ProxyIdentitySecret"] = "integration-proxy-secret"
                 }
             }) ?? throw new InvalidOperationException("Failed to start the published backend.");
 
@@ -222,6 +224,61 @@ public sealed class PublishedBackendSmokeTests
             Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
             Assert.True(rejected.Headers.Contains("Retry-After"));
 
+            // The signed proxy boundary gives each visitor its own bucket across
+            // the frontend-to-backend path, even though the connection bucket is
+            // already exhausted.
+            string Proof(string clientKey)
+            {
+                var bytes = HMACSHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes("integration-proxy-secret"),
+                    System.Text.Encoding.UTF8.GetBytes(clientKey));
+                return Convert.ToHexString(bytes).ToLowerInvariant();
+            }
+
+            HttpRequestMessage SignedChatRequest(string clientKey, string? proof)
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/assistant/chat", UriKind.Relative));
+                request.Headers.TryAddWithoutValidation("X-Client-Key", clientKey);
+                if (proof is not null)
+                {
+                    request.Headers.TryAddWithoutValidation("X-Client-Key-Proof", proof);
+                }
+
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(new { message = "Tell me about autonomous agents" }),
+                    System.Text.Encoding.UTF8,
+                    "application/json");
+                return request;
+            }
+
+            const string visitorKey = "visitor-203.0.113.10";
+            for (var attempt = 1; attempt <= 10; attempt++)
+            {
+                using var signedRequest = SignedChatRequest(visitorKey, Proof(visitorKey));
+                using var signedResponse = await http.SendAsync(signedRequest);
+                Assert.Equal(HttpStatusCode.OK, signedResponse.StatusCode);
+            }
+
+            using (var overLimitRequest = SignedChatRequest(visitorKey, Proof(visitorKey)))
+            using (var overLimitResponse = await http.SendAsync(overLimitRequest))
+            {
+                Assert.Equal(HttpStatusCode.TooManyRequests, overLimitResponse.StatusCode);
+            }
+
+            // Forged or unsigned identities never create fresh buckets; they fall
+            // into the shared connection bucket, which is already exhausted.
+            using (var forgedRequest = SignedChatRequest("visitor-198.51.100.99", "deadbeef"))
+            using (var forgedResponse = await http.SendAsync(forgedRequest))
+            {
+                Assert.Equal(HttpStatusCode.TooManyRequests, forgedResponse.StatusCode);
+            }
+
+            using (var unsignedRequest = SignedChatRequest("visitor-198.51.100.100", null))
+            using (var unsignedResponse = await http.SendAsync(unsignedRequest))
+            {
+                Assert.Equal(HttpStatusCode.TooManyRequests, unsignedResponse.StatusCode);
+            }
+
             // Production without a Turnstile secret must fail startup instead of
             // running unprotected.
             using var productionHost = Process.Start(new ProcessStartInfo
@@ -245,6 +302,29 @@ public sealed class PublishedBackendSmokeTests
             Assert.True(exited, "Production host without Turnstile secret should fail startup.");
             Assert.NotEqual(0, productionHost.ExitCode);
             Assert.Contains("Turnstile", startupError);
+
+            using var proxySecretProbe = Process.Start(new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                Arguments = $"\"{Path.Combine(publishDir, "Rafael.Portfolio.Web.dll")}\"",
+                WorkingDirectory = publishDir,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                Environment =
+                {
+                    ["ASPNETCORE_URLS"] = $"http://127.0.0.1:{GetFreePort()}",
+                    ["ASPNETCORE_ENVIRONMENT"] = "Production",
+                    ["Turnstile__SecretKey"] = "0x4AAAAAA_test_secret",
+                    ["AssistantSecurity__ProxyIdentitySecret"] = ""
+                }
+            }) ?? throw new InvalidOperationException("Failed to start the proxy-secret probe.");
+
+            var proxyProbeExited = proxySecretProbe.WaitForExit(milliseconds: 30000);
+            var proxyProbeError = await proxySecretProbe.StandardError.ReadToEndAsync();
+            Assert.True(proxyProbeExited, "Production host without the proxy identity secret should fail startup.");
+            Assert.NotEqual(0, proxySecretProbe.ExitCode);
+            Assert.Contains("ProxyIdentitySecret", proxyProbeError);
         }
         finally
         {

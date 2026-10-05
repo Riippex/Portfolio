@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useTransition } from "react";
 import type { AssistantChatMessage, AssistantCitation, AssistantGroundingStatus } from "../model";
 import { streamAssistantChat } from "../api";
-import { buildAssistantChatRequest } from "../turnstile";
+import { prepareAssistantChatRequest } from "../turnstile";
 import Link from "next/link";
 
 const INITIAL_MESSAGES: readonly AssistantChatMessage[] = [
@@ -74,10 +74,24 @@ export function AssistantChat() {
     let accumulatedStatus: AssistantGroundingStatus = "grounded";
     const accumulatedCitations: AssistantCitation[] = [];
 
-    const requestBody = await buildAssistantChatRequest(trimmed);
+    let preparation;
+    try {
+      preparation = await prepareAssistantChatRequest(trimmed);
+    } catch {
+      preparation = { kind: "verification_failed" as const };
+    }
+
+    if (preparation.kind === "verification_failed") {
+      setIsStreaming(false);
+      setErrorMessage("Human verification could not be completed. Please try again.");
+      startTransition(() => {
+        setMessages((prev) => prev.filter((msg) => msg.id !== assistantMessageId));
+      });
+      return;
+    }
 
     streamAssistantChat(
-      requestBody,
+      preparation.request,
       {
         onStatus: (status) => {
           accumulatedStatus = status;

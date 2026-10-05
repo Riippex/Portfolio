@@ -112,4 +112,37 @@ public sealed class AssistantRateLimiterTests
 
         Assert.True(limiter.TrackedClientCount <= 51);
     }
+
+    [Fact]
+    public async Task Concurrent_acquisition_and_eviction_never_grant_detached_budget()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 10, window: TimeSpan.FromSeconds(60), timeProvider: time);
+        const int windows = 3;
+        var allowed = new int[1];
+
+        var workers = Enumerable.Range(0, 16).Select(_ => Task.Run(() =>
+        {
+            for (var i = 0; i < 30; i++)
+            {
+                if (limiter.TryAcquire("shared-key", out TimeSpan _))
+                {
+                    Interlocked.Increment(ref allowed[0]);
+                }
+            }
+        })).ToArray();
+
+        for (var w = 0; w < windows; w++)
+        {
+            time.Advance(TimeSpan.FromSeconds(61));
+            await Task.Yield();
+        }
+
+        await Task.WhenAll(workers);
+
+        // Without linearized eviction, acquisitions land in detached queues and
+        // the window budget is silently reset; the limit must hold per window.
+        Assert.True(allowed[0] <= 10 * (windows + 1), $"Granted {allowed[0]} acquisitions across {windows + 1} windows.");
+        Assert.True(limiter.TrackedClientCount <= 1);
+    }
 }

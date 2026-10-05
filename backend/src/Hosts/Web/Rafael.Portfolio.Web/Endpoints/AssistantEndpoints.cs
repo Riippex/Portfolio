@@ -30,7 +30,7 @@ public static class AssistantEndpoints
         {
             var logger = loggerFactory.CreateLogger("Rafael.Portfolio.Assistant");
             var stopwatch = Stopwatch.StartNew();
-            var clientKey = GetClientKey(httpContext, configuration);
+            var (clientKey, turnstileRemoteIp) = ResolveClientIdentity(httpContext, configuration);
 
             if (!rateLimiter.TryAcquire(clientKey, out var retryAfter))
             {
@@ -42,7 +42,7 @@ public static class AssistantEndpoints
 
             var turnstileValid = await turnstileValidator.ValidateAsync(
                 request?.TurnstileToken,
-                clientKey,
+                turnstileRemoteIp,
                 httpContext.RequestAborted);
 
             if (!turnstileValid)
@@ -103,7 +103,7 @@ public static class AssistantEndpoints
         {
             var logger = loggerFactory.CreateLogger("Rafael.Portfolio.Assistant");
             var stopwatch = Stopwatch.StartNew();
-            var clientKey = GetClientKey(httpContext, configuration);
+            var (clientKey, turnstileRemoteIp) = ResolveClientIdentity(httpContext, configuration);
 
             if (!rateLimiter.TryAcquire(clientKey, out var retryAfter))
             {
@@ -118,7 +118,7 @@ public static class AssistantEndpoints
 
             var turnstileValid = await turnstileValidator.ValidateAsync(
                 request?.TurnstileToken,
-                clientKey,
+                turnstileRemoteIp,
                 httpContext.RequestAborted);
 
             if (!turnstileValid)
@@ -206,32 +206,88 @@ public static class AssistantEndpoints
         return api;
     }
 
-    private static string GetClientKey(HttpContext context, IConfiguration configuration)
+    private const int MaxClientKeyLength = 128;
+
+    private static (string RateLimitKey, string TurnstileRemoteIp) ResolveClientIdentity(
+        HttpContext context,
+        IConfiguration configuration)
     {
-        var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var connectionIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
-        if (!IsTrustedProxy(remoteIp, configuration))
+        var visitorId = GetSignedVisitorId(context, configuration, out var identitySecret);
+        if (visitorId is not null)
         {
-            return remoteIp;
+            // The raw visitor id leaves the process only inside this request's
+            // Turnstile verification; the rate-limit key is an opaque HMAC
+            // derivative that is never logged or reversible.
+            return ($"v:{ComputeProof(identitySecret!, $"ratelimit:{visitorId}")}", visitorId);
         }
 
-        var cfConnectingIp = context.Request.Headers["CF-Connecting-IP"].FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(cfConnectingIp))
-        {
-            return cfConnectingIp.Trim();
-        }
+        var key = connectionIp;
 
-        var xForwardedFor = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(xForwardedFor))
+        if (IsTrustedProxy(connectionIp, configuration))
         {
-            var firstIp = xForwardedFor.Split(',')[0].Trim();
-            if (!string.IsNullOrEmpty(firstIp))
+            var cfConnectingIp = context.Request.Headers["CF-Connecting-IP"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(cfConnectingIp))
             {
-                return firstIp;
+                key = cfConnectingIp.Trim();
+            }
+            else
+            {
+                var xForwardedFor = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(xForwardedFor))
+                {
+                    var firstIp = xForwardedFor.Split(',')[0].Trim();
+                    if (!string.IsNullOrEmpty(firstIp))
+                    {
+                        key = firstIp;
+                    }
+                }
             }
         }
 
-        return remoteIp;
+        return (key, key);
+    }
+
+    private static string? GetSignedVisitorId(
+        HttpContext context,
+        IConfiguration configuration,
+        out string? identitySecret)
+    {
+        identitySecret = configuration["AssistantSecurity:ProxyIdentitySecret"];
+        if (string.IsNullOrWhiteSpace(identitySecret))
+        {
+            identitySecret = null;
+            return null;
+        }
+
+        var asserted = context.Request.Headers["X-Client-Key"].FirstOrDefault();
+        var proof = context.Request.Headers["X-Client-Key-Proof"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(asserted) || string.IsNullOrWhiteSpace(proof))
+        {
+            return null;
+        }
+
+        var visitorId = asserted.Trim();
+        if (visitorId.Length > MaxClientKeyLength)
+        {
+            return null;
+        }
+
+        var expected = ComputeProof(identitySecret, visitorId);
+        var expectedBytes = Encoding.ASCII.GetBytes(expected);
+        var providedBytes = Encoding.ASCII.GetBytes(proof.Trim());
+
+        return expectedBytes.Length == providedBytes.Length &&
+            CryptographicOperations.FixedTimeEquals(expectedBytes, providedBytes)
+            ? visitorId
+            : null;
+    }
+
+    private static string ComputeProof(string secret, string clientKey)
+    {
+        var bytes = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(clientKey));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
     private static bool IsTrustedProxy(string remoteIp, IConfiguration configuration)

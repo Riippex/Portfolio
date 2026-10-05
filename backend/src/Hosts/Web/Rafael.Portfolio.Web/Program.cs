@@ -23,6 +23,7 @@ builder.Services.AddSingleton<IAssistantSafetyEvaluator, AssistantSafetyEvaluato
 builder.Services.AddSingleton<IAssistantRateLimiter>(_ => new InMemorySlidingWindowRateLimiter(10, TimeSpan.FromSeconds(60)));
 
 var turnstileSecret = builder.Configuration["Turnstile:SecretKey"];
+var proxyIdentitySecret = builder.Configuration["AssistantSecurity:ProxyIdentitySecret"];
 var turnstileBypassAllowed = builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Test");
 
 if (string.IsNullOrWhiteSpace(turnstileSecret) && !turnstileBypassAllowed)
@@ -30,6 +31,13 @@ if (string.IsNullOrWhiteSpace(turnstileSecret) && !turnstileBypassAllowed)
     throw new InvalidOperationException(
         "Turnstile:SecretKey must be configured outside Development/Test environments. " +
         "Human verification fails closed rather than running unprotected.");
+}
+
+if (string.IsNullOrWhiteSpace(proxyIdentitySecret) && !turnstileBypassAllowed)
+{
+    throw new InvalidOperationException(
+        "AssistantSecurity:ProxyIdentitySecret must be configured outside Development/Test environments. " +
+        "Per-visitor rate limiting requires the signed proxy identity boundary.");
 }
 
 builder.Services.AddSingleton<ITurnstileValidator>(sp =>

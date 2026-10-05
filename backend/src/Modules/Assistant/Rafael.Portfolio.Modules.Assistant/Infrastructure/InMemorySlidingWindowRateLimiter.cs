@@ -30,25 +30,40 @@ public sealed class InMemorySlidingWindowRateLimiter : IAssistantRateLimiter
         ArgumentException.ThrowIfNullOrWhiteSpace(clientKey);
 
         var now = _timeProvider.GetUtcNow();
-        var queue = _clients.GetOrAdd(clientKey, static _ => new Queue<DateTimeOffset>());
-
         bool allowed;
-        lock (queue)
-        {
-            Prune(queue, now);
 
-            if (queue.Count < _limit)
+        while (true)
+        {
+            var queue = _clients.GetOrAdd(clientKey, static _ => new Queue<DateTimeOffset>());
+
+            lock (queue)
             {
-                queue.Enqueue(now);
-                retryAfter = TimeSpan.Zero;
-                allowed = true;
-            }
-            else
-            {
-                var oldest = queue.Peek();
-                var remaining = _window - (now - oldest);
-                retryAfter = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromSeconds(1);
-                allowed = false;
+                // A concurrent sweep may have detached this queue between
+                // GetOrAdd and the lock; retry against the live entry so the
+                // acquisition is never recorded in an orphaned queue.
+                if (!_clients.TryGetValue(clientKey, out var current) ||
+                    !ReferenceEquals(current, queue))
+                {
+                    continue;
+                }
+
+                Prune(queue, now);
+
+                if (queue.Count < _limit)
+                {
+                    queue.Enqueue(now);
+                    retryAfter = TimeSpan.Zero;
+                    allowed = true;
+                }
+                else
+                {
+                    var oldest = queue.Peek();
+                    var remaining = _window - (now - oldest);
+                    retryAfter = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromSeconds(1);
+                    allowed = false;
+                }
+
+                break;
             }
         }
 
