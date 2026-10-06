@@ -28,8 +28,18 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
     {
         "requirements", "responsibilities", "qualifications", "about the role", "about us", "about the team",
         "benefits", "nice to have", "must have", "what you'll do", "what you will do", "what we offer",
-        "what we're looking for", "who you are", "skills", "key skills", "job description", "overview", "perks"
+        "what we're looking for", "who you are", "skills", "key skills", "job description", "overview", "perks",
+        "about the company", "why join us", "perks and benefits", "benefits and perks", "compensation",
+        "our culture", "how to apply"
     };
+
+    // Sections that describe the employer or what it offers rather than what the
+    // role requires; anything listed under them is not a requirement.
+    private static readonly string[] ExcludedSectionMarkers =
+    [
+        "benefit", "perk", "about", "what we offer", "we offer", "why join", "compensation", "salary",
+        "culture", "equal opportunity", "how to apply", "who we are", "our mission", "our values"
+    ];
 
     private static readonly Dictionary<string, int> NumberWords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -101,6 +111,7 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
     private sealed record ChunkAssessment(
         JobMatchingEvidenceChunk Chunk,
         double Coverage,
+        JobMatchingEvidenceClaim? DirectClaim,
         JobMatchingEvidenceClaim? VerifiedClaim,
         JobMatchingEvidenceClaim? BestClaim);
 
@@ -163,9 +174,10 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         var assessments = evidenceAdapter
             .SearchEvidence(parsed.SearchText, EvidenceLimit)
             .Where(c => c.Score > 0)
-            .Select(c => Assess(c, parsed.CapabilityTerms))
+            .Select(c => Assess(c, parsed.CapabilityTerms, parsed.Qualifiers))
             .Where(a => a.Coverage >= RelevanceThreshold)
-            .OrderByDescending(a => a.VerifiedClaim is not null)
+            .OrderByDescending(a => a.DirectClaim is not null)
+            .ThenByDescending(a => a.VerifiedClaim is not null)
             .ThenByDescending(a => a.Coverage)
             .ThenByDescending(a => a.Chunk.Score)
             .ToList();
@@ -176,14 +188,13 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
             return;
         }
 
-        var direct = assessments.FirstOrDefault(a => a.VerifiedClaim is not null);
-        var unsupported = direct is null
-            ? parsed.Qualifiers
-            : parsed.Qualifiers.Where(q => !QualifierSupported(q, direct.Chunk)).ToList();
-
-        if (direct is not null && unsupported.Count == 0)
+        // A direct match is traced to exactly one cited claim that supports the
+        // capability and every qualifier on its own. Qualifiers are never
+        // satisfied by some other claim in the same chunk.
+        var direct = assessments.FirstOrDefault(a => a.DirectClaim is not null);
+        if (direct is not null)
         {
-            var claim = direct.VerifiedClaim!;
+            var claim = direct.DirectClaim!;
             directMatches.Add(new JobEvidenceMatch(
                 RequirementId: requirement.RequirementId,
                 RequirementText: requirement.RequirementText,
@@ -200,8 +211,15 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
             return;
         }
 
-        var top = direct ?? assessments[0];
+        // Otherwise the capability may still be inferred (from a verified claim
+        // that lacks the qualifier, or from weaker evidence); every qualifier the
+        // cited claim does not itself state remains a gap.
+        var capable = assessments.FirstOrDefault(a => a.VerifiedClaim is not null);
+        var top = capable ?? assessments[0];
         var topClaim = top.VerifiedClaim ?? top.BestClaim;
+        var unsupported = capable is null
+            ? parsed.Qualifiers
+            : parsed.Qualifiers.Where(q => !ClaimStatesQualifier(capable.VerifiedClaim!, q)).ToList();
         inferences.Add(new JobInferenceMatch(
             RequirementId: requirement.RequirementId,
             RequirementText: requirement.RequirementText,
@@ -215,7 +233,7 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
                 : top.Chunk.Citations.FirstOrDefault() ?? $"{top.Chunk.DocumentId}#{top.Chunk.SectionSlug}",
             SupportingClaimId: topClaim?.ClaimId,
             SupportingEvidenceStatus: top.Chunk.EvidenceStatus,
-            Rationale: BuildInferenceRationale(top, direct is not null, unsupported)));
+            Rationale: BuildInferenceRationale(top, capable is not null, unsupported)));
 
         foreach (var qualifier in unsupported)
         {
@@ -240,7 +258,10 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
             : $"{rationale} The qualifier {string.Join(", ", unsupported.Select(q => $"\"{q.Text}\""))} is not documented, so it remains a gap.";
     }
 
-    private static ChunkAssessment Assess(JobMatchingEvidenceChunk chunk, IReadOnlyList<string> capabilityTerms)
+    private static ChunkAssessment Assess(
+        JobMatchingEvidenceChunk chunk,
+        IReadOnlyList<string> capabilityTerms,
+        IReadOnlyList<Qualifier> qualifiers)
     {
         var chunkTerms = Tokenize($"{chunk.SectionHeading} {chunk.Title} {chunk.Content} " +
                                   string.Join(' ', chunk.Claims.Select(c => c.Statement)));
@@ -250,6 +271,8 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         var bestClaimCoverage = 0.0;
         JobMatchingEvidenceClaim? verifiedClaim = null;
         var verifiedClaimCoverage = 0.0;
+        JobMatchingEvidenceClaim? directClaim = null;
+        var directClaimCoverage = 0.0;
         var documentVerified = chunk.EvidenceStatus.Equals(VerifiedStatus, StringComparison.OrdinalIgnoreCase);
 
         foreach (var claim in chunk.Claims)
@@ -273,31 +296,38 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
 
             // A direct match needs a verified document, a verified claim, and a
             // resolved citation; anything less is at most an inference.
-            if (documentVerified
-                && claim.Status.Equals(VerifiedStatus, StringComparison.OrdinalIgnoreCase)
-                && !string.IsNullOrWhiteSpace(claim.Citation)
-                && claimCoverage > verifiedClaimCoverage)
+            if (!documentVerified
+                || !claim.Status.Equals(VerifiedStatus, StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(claim.Citation))
+            {
+                continue;
+            }
+
+            if (claimCoverage > verifiedClaimCoverage)
             {
                 verifiedClaim = claim;
                 verifiedClaimCoverage = claimCoverage;
             }
+
+            // The same claim must also state every qualifier to stand alone.
+            if (claimCoverage > directClaimCoverage && qualifiers.All(q => ClaimStatesQualifier(claim, q)))
+            {
+                directClaim = claim;
+                directClaimCoverage = claimCoverage;
+            }
         }
 
-        return new ChunkAssessment(chunk, coverage, verifiedClaim, bestClaim);
+        return new ChunkAssessment(chunk, coverage, directClaim, verifiedClaim, bestClaim);
     }
 
-    private static bool QualifierSupported(Qualifier qualifier, JobMatchingEvidenceChunk chunk)
+    private static bool ClaimStatesQualifier(JobMatchingEvidenceClaim claim, Qualifier qualifier)
     {
-        var statements = chunk.Claims
-            .Where(c => c.Status.Equals(VerifiedStatus, StringComparison.OrdinalIgnoreCase))
-            .Select(c => c.Statement)
-            .ToList();
-
+        var statement = claim.Statement;
         return qualifier.Kind switch
         {
-            QualifierKind.Years => statements.Any(s => YearsRegex.Matches(s).Any(m => ParseYears(m).Min >= qualifier.MinYears)),
-            QualifierKind.Degree => statements.Any(s => DegreeRegex.IsMatch(s)),
-            _ => statements.Any(s => CertificationRegex.IsMatch(s))
+            QualifierKind.Years => YearsRegex.Matches(statement).Any(m => ParseYears(m).Min >= qualifier.MinYears),
+            QualifierKind.Degree => DegreeRegex.IsMatch(statement),
+            _ => CertificationRegex.IsMatch(statement)
         };
     }
 
@@ -371,9 +401,43 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
                 category ?? CategorizeRequirement(requirementText)));
         }
 
-        // 1. Bulleted or numbered items.
-        foreach (Match match in ListItemRegex.Matches(text))
+        // Walk the vacancy section by section: a section label (for example
+        // "Benefits:") switches the active section, and lines under a section that
+        // does not describe the role's requirements are dropped entirely. Role
+        // titles and labels themselves never become requirements.
+        var bodyLines = new List<string>();
+        var inExcludedSection = false;
+        foreach (var rawLine in text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            if (IsSectionLabel(line))
+            {
+                inExcludedSection = IsExcludedSection(line);
+                continue;
+            }
+
+            if (inExcludedSection || IsHeadingLine(line))
+            {
+                continue;
+            }
+
+            bodyLines.Add(line);
+        }
+
+        // 1. Bulleted or numbered items.
+        foreach (var line in bodyLines)
+        {
+            var match = ListItemRegex.Match(line);
+            if (!match.Success)
+            {
+                continue;
+            }
+
             var content = match.Groups[1].Value.Trim();
             if (content.Length is >= 5 and <= 200 && !IsHeadingLine(content))
             {
@@ -381,12 +445,6 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
             }
         }
 
-        // Headings (role titles and section labels) never become requirements.
-        var bodyLines = text
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.Trim())
-            .Where(line => line.Length > 0 && !IsHeadingLine(line))
-            .ToList();
         var body = string.Join('\n', bodyLines);
 
         // 2. Known competency domains mentioned anywhere in the body.
@@ -419,6 +477,23 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         }
 
         return requirements;
+    }
+
+    // A label that opens a new section: a markdown heading, a line ending in a
+    // colon, or a bare well-known section name. Role titles are not labels, so
+    // they leave the active section unchanged.
+    private static bool IsSectionLabel(string line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.StartsWith('#')
+            || trimmed.EndsWith(':')
+            || SectionHeadings.Contains(trimmed);
+    }
+
+    private static bool IsExcludedSection(string label)
+    {
+        var name = label.Trim().TrimStart('#').TrimEnd(':').Trim().ToLowerInvariant();
+        return ExcludedSectionMarkers.Any(marker => name.Contains(marker, StringComparison.Ordinal));
     }
 
     private static bool IsHeadingLine(string line)
