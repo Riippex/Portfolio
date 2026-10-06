@@ -507,4 +507,125 @@ public sealed class JobMatchingServiceTests
         Assert.Empty(response.ExtractedRequirements);
         Assert.Empty(response.Gaps);
     }
+
+    private static JobMatchingEvidenceChunk VerifiedChunkWithClaim(string slug, string heading, string statement) =>
+        WithClaims(
+            CreateChunk(slug, "Vextis", heading, statement, "verified", 2.0),
+            new JobMatchingEvidenceClaim(
+                $"claim-{slug}-01", statement, "verified", $"docs/evidence/projects/{slug}.md#claim"));
+
+    [Fact]
+    public void Unrelated_years_claim_under_a_matching_heading_is_not_a_direct_match()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Autonomous Agents", "Seven years leading unrelated hardware work.");
+
+        var response = Analyze("Platform Engineer\n- Five years of autonomous agents experience", chunk);
+
+        Assert.Empty(response.DirectMatches);
+        var inference = Assert.Single(response.Inferences);
+        Assert.Contains("no verified claim", inference.Rationale);
+        Assert.Equal("Five years", Assert.Single(response.Gaps).UnsupportedQualifier);
+    }
+
+    [Fact]
+    public void Claim_that_states_the_capability_itself_is_still_a_direct_match_under_its_heading()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Autonomous Agents", "Seven years building autonomous agents.");
+
+        var response = Analyze("Platform Engineer\n- Five years of autonomous agents experience", chunk);
+
+        Assert.Equal("claim-vextis-01", Assert.Single(response.DirectMatches).ClaimId);
+    }
+
+    [Fact]
+    public void Bachelors_degree_claim_does_not_satisfy_a_masters_requirement()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Education", "Bachelor's degree with autonomous agents research.");
+
+        var response = Analyze("Platform Engineer\n- Master's degree in autonomous agents", chunk);
+
+        Assert.Empty(response.DirectMatches);
+        Assert.Single(response.Inferences);
+        Assert.Equal("Master's degree", Assert.Single(response.Gaps).UnsupportedQualifier);
+    }
+
+    [Theory]
+    [InlineData("- Master's degree in autonomous agents", "Master's degree focused on autonomous agents.")]
+    [InlineData("- Bachelor's degree in autonomous agents", "Bachelor's degree focused on autonomous agents.")]
+    [InlineData("- PhD in autonomous agents", "Ph.D. focused on autonomous agents.")]
+    [InlineData("- Degree in autonomous agents", "Bachelor's degree focused on autonomous agents.")]
+    public void Matching_degree_level_is_a_direct_match(string requirement, string claimStatement)
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Education", claimStatement);
+
+        var response = Analyze($"Platform Engineer\n{requirement}", chunk);
+
+        Assert.Single(response.DirectMatches);
+        Assert.Empty(response.Gaps);
+    }
+
+    [Fact]
+    public void Generic_degree_claim_does_not_satisfy_a_named_level()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Education", "A degree focused on autonomous agents.");
+
+        var response = Analyze("Platform Engineer\n- Master's degree in autonomous agents", chunk);
+
+        Assert.Empty(response.DirectMatches);
+        Assert.Equal("Master's degree", Assert.Single(response.Gaps).UnsupportedQualifier);
+    }
+
+    [Fact]
+    public void A_different_certification_does_not_certify_the_requested_subject()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Credentials", "AWS experience and PMP certification.");
+
+        var response = Analyze("Platform Engineer\n- AWS certification", chunk);
+
+        Assert.Empty(response.DirectMatches);
+        Assert.Single(response.Inferences);
+        Assert.Equal("certification", Assert.Single(response.Gaps).UnsupportedQualifier);
+    }
+
+    [Theory]
+    [InlineData("- AWS certification", "AWS Certified Solutions Architect.")]
+    [InlineData("- AWS certification", "Holds a certification in AWS.")]
+    [InlineData("- PMP certification", "AWS experience and PMP certification.")]
+    public void Certification_tied_to_the_requested_subject_is_a_direct_match(string requirement, string claimStatement)
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Credentials", claimStatement);
+
+        var response = Analyze($"Platform Engineer\n{requirement}", chunk);
+
+        Assert.Single(response.DirectMatches);
+        Assert.Empty(response.Gaps);
+    }
+
+    [Fact]
+    public void Requirements_under_about_the_role_are_extracted_while_company_sections_stay_excluded()
+    {
+        var response = Analyze(
+            "Platform Engineer\n\nAbout the role:\n- Computer vision pipeline ownership\n- Autonomous agents design\n\n" +
+            "About us\nWe build things together.\n- Friendly culture\n\n" +
+            "About the company:\n- Founded in 2015\n\n" +
+            "About the team:\n- Ten engineers\n\nBenefits:\n- Gym membership",
+            CreateChunk("kinetiq-v", "Kinetiq V", "Pipeline", "Computer vision pipeline.", "verified", 2.0));
+
+        Assert.Equal(
+            ["Computer vision pipeline ownership", "Autonomous agents design"],
+            response.ExtractedRequirements.Select(r => r.RequirementText));
+    }
+
+    [Fact]
+    public void Role_overview_and_duties_sections_resume_extraction_after_excluded_sections()
+    {
+        var response = Analyze(
+            "Platform Engineer\nBenefits:\n- Gym membership\n\nRole overview\n- Computer vision pipeline ownership\n\n" +
+            "About us\n- Friendly culture\n\nDuties\n- Autonomous agents design",
+            CreateChunk("kinetiq-v", "Kinetiq V", "Pipeline", "Computer vision pipeline.", "verified", 2.0));
+
+        Assert.Equal(
+            ["Computer vision pipeline ownership", "Autonomous agents design"],
+            response.ExtractedRequirements.Select(r => r.RequirementText));
+    }
 }

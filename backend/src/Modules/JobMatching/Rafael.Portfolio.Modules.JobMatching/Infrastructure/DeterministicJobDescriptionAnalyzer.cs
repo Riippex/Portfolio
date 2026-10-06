@@ -9,6 +9,8 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
     private const int MaxRequirements = 10;
     private const int EvidenceLimit = 5;
     private const string VerifiedStatus = "verified";
+    private const string GenericDegree = "generic";
+    private const int CertificationWindow = 3;
 
     // A chunk or claim supports a requirement only when it covers at least this
     // share of the requirement's capability terms.
@@ -30,14 +32,15 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         "benefits", "nice to have", "must have", "what you'll do", "what you will do", "what we offer",
         "what we're looking for", "who you are", "skills", "key skills", "job description", "overview", "perks",
         "about the company", "why join us", "perks and benefits", "benefits and perks", "compensation",
-        "our culture", "how to apply"
+        "our culture", "how to apply", "role overview", "duties", "key responsibilities", "your responsibilities"
     };
 
     // Sections that describe the employer or what it offers rather than what the
     // role requires; anything listed under them is not a requirement.
     private static readonly string[] ExcludedSectionMarkers =
     [
-        "benefit", "perk", "about", "what we offer", "we offer", "why join", "compensation", "salary",
+        "benefit", "perk", "about us", "about the company", "about the team", "about our",
+        "what we offer", "we offer", "why join", "compensation", "salary",
         "culture", "equal opportunity", "how to apply", "who we are", "our mission", "our values"
     ];
 
@@ -66,7 +69,7 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex CertificationRegex = new(
-        @"(?<![\p{L}\p{N}])(?:certified|certifications?|certificates?|pmp|cissp)(?![\p{L}\p{N}])",
+        @"(?<![\p{L}\p{N}])(?:certified|certifications?|certificates?)(?![\p{L}\p{N}])",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Words that frame a requirement without naming a capability.
@@ -99,7 +102,9 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         Certification
     }
 
-    private sealed record Qualifier(QualifierKind Kind, string Text, int MinYears);
+    // Detail is the degree level for degrees ("bachelor", "master", "doctorate", or
+    // "generic" when no level is named) and unused otherwise.
+    private sealed record Qualifier(QualifierKind Kind, string Text, int MinYears, string Detail = "");
 
     private sealed record ParsedRequirement(
         JobMatchRequirement Requirement,
@@ -219,7 +224,7 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         var topClaim = top.VerifiedClaim ?? top.BestClaim;
         var unsupported = capable is null
             ? parsed.Qualifiers
-            : parsed.Qualifiers.Where(q => !ClaimStatesQualifier(capable.VerifiedClaim!, q)).ToList();
+            : parsed.Qualifiers.Where(q => !ClaimStatesQualifier(capable.VerifiedClaim!, q, parsed.CapabilityTerms)).ToList();
         inferences.Add(new JobInferenceMatch(
             RequirementId: requirement.RequirementId,
             RequirementText: requirement.RequirementText,
@@ -282,16 +287,25 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
                 continue;
             }
 
-            var claimCoverage = Coverage(capabilityTerms, Tokenize($"{claim.Statement} {chunk.SectionHeading}"));
-            if (claimCoverage < RelevanceThreshold)
+            // The section heading is context for inferences only. Direct evidence is
+            // attributed to the claim, so the claim statement itself must state the
+            // capability; a claim that merely sits under a matching heading cannot.
+            var statementCoverage = Coverage(capabilityTerms, Tokenize(claim.Statement));
+            var contextCoverage = Coverage(capabilityTerms, Tokenize($"{claim.Statement} {chunk.SectionHeading}"));
+            if (contextCoverage < RelevanceThreshold)
             {
                 continue;
             }
 
-            if (claimCoverage > bestClaimCoverage)
+            if (contextCoverage > bestClaimCoverage)
             {
                 bestClaim = claim;
-                bestClaimCoverage = claimCoverage;
+                bestClaimCoverage = contextCoverage;
+            }
+
+            if (statementCoverage < RelevanceThreshold)
+            {
+                continue;
             }
 
             // A direct match needs a verified document, a verified claim, and a
@@ -303,32 +317,73 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
                 continue;
             }
 
-            if (claimCoverage > verifiedClaimCoverage)
+            if (statementCoverage > verifiedClaimCoverage)
             {
                 verifiedClaim = claim;
-                verifiedClaimCoverage = claimCoverage;
+                verifiedClaimCoverage = statementCoverage;
             }
 
             // The same claim must also state every qualifier to stand alone.
-            if (claimCoverage > directClaimCoverage && qualifiers.All(q => ClaimStatesQualifier(claim, q)))
+            if (statementCoverage > directClaimCoverage
+                && qualifiers.All(q => ClaimStatesQualifier(claim, q, capabilityTerms)))
             {
                 directClaim = claim;
-                directClaimCoverage = claimCoverage;
+                directClaimCoverage = statementCoverage;
             }
         }
 
         return new ChunkAssessment(chunk, coverage, directClaim, verifiedClaim, bestClaim);
     }
 
-    private static bool ClaimStatesQualifier(JobMatchingEvidenceClaim claim, Qualifier qualifier)
+    private static bool ClaimStatesQualifier(
+        JobMatchingEvidenceClaim claim,
+        Qualifier qualifier,
+        IReadOnlyList<string> subjectTerms)
     {
         var statement = claim.Statement;
-        return qualifier.Kind switch
+        switch (qualifier.Kind)
         {
-            QualifierKind.Years => YearsRegex.Matches(statement).Any(m => ParseYears(m).Min >= qualifier.MinYears),
-            QualifierKind.Degree => DegreeRegex.IsMatch(statement),
-            _ => CertificationRegex.IsMatch(statement)
-        };
+            case QualifierKind.Years:
+                return YearsRegex.Matches(statement).Any(m => ParseYears(m).Min >= qualifier.MinYears);
+
+            case QualifierKind.Degree:
+                // A named level must be stated exactly (a bachelor's degree never
+                // satisfies a master's requirement); a generic "degree" accepts any.
+                var levels = DegreeRegex.Matches(statement).Select(m => DegreeLevel(m.Value)).ToList();
+                return qualifier.Detail == GenericDegree
+                    ? levels.Count > 0
+                    : levels.Contains(qualifier.Detail);
+
+            default:
+                // A certification must be tied to the requested subject: every
+                // subject term has to sit right beside the certification mention, so
+                // "AWS experience and PMP certification" does not certify AWS.
+                return CertificationRegex.Matches(statement).Any(m =>
+                {
+                    var before = TermRegex.Matches(statement[..m.Index].ToLowerInvariant()).Select(x => x.Value).TakeLast(CertificationWindow);
+                    var after = TermRegex.Matches(statement[(m.Index + m.Length)..].ToLowerInvariant()).Select(x => x.Value).Take(CertificationWindow);
+                    var window = Tokenize(string.Join(' ', before.Concat(after)));
+                    return subjectTerms.Count > 0 && subjectTerms.All(window.Contains);
+                });
+        }
+    }
+
+    private static string DegreeLevel(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        if (lower.Contains("bachelor", StringComparison.Ordinal) || Regex.IsMatch(lower, @"^b\.?sc"))
+        {
+            return "bachelor";
+        }
+
+        if (lower.Contains("master", StringComparison.Ordinal) || Regex.IsMatch(lower, @"^m\.?sc"))
+        {
+            return "master";
+        }
+
+        return lower.StartsWith("ph", StringComparison.Ordinal) || lower.Contains("doctorate", StringComparison.Ordinal)
+            ? "doctorate"
+            : GenericDegree;
     }
 
     private static JobGap NoEvidenceGap(JobMatchRequirement requirement) =>
@@ -530,7 +585,7 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
 
         foreach (Match match in DegreeRegex.Matches(capabilityText))
         {
-            qualifiers.Add(new Qualifier(QualifierKind.Degree, match.Value.Trim(), 0));
+            qualifiers.Add(new Qualifier(QualifierKind.Degree, match.Value.Trim(), 0, DegreeLevel(match.Value)));
         }
 
         capabilityText = DegreeRegex.Replace(capabilityText, " ");
