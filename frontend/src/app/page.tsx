@@ -1,4 +1,5 @@
 import { AssistantChat } from "@/modules/assistant/components/assistant-chat";
+import { JobMatcher } from "@/modules/job-matching/components/job-matcher";
 import { getProfile, getSelectedProjects } from "@/modules/portfolio/api";
 import Link from "next/link";
 
@@ -20,6 +21,7 @@ export default async function Home() {
         <div className="nav-links">
           <a href="#work">Work</a>
           <a href="#assistant">Rafael AI</a>
+          <a href="#match">Job Match</a>
           <a href="#assistant">Contact</a>
         </div>
         <span className="status"><i /> Building in public</span>
@@ -100,6 +102,14 @@ export default async function Home() {
           <p>A grounded portfolio agent designed to cite its claims and admit when evidence is missing.</p>
         </div>
         <AssistantChat />
+      </section>
+
+      <section id="match" className="shell section match-section">
+        <div className="section-heading">
+          <div><span className="kicker">Role alignment</span><h2>Job Match & Gap Analysis.</h2></div>
+          <p>Evaluate vacancies against verified evidence. Unverified claims remain inferences or gaps; no arbitrary scores.</p>
+        </div>
+        <JobMatcher />
       </section>
 
       <footer className="shell footer">

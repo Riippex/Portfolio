@@ -297,6 +297,54 @@ public sealed class PublishedBackendSmokeTests
                 Assert.Equal(HttpStatusCode.TooManyRequests, overLimitResponse.StatusCode);
             }
 
+            run.Stage = "development job analysis requests";
+            const string jobsVisitorKey = "visitor-jobs-integration";
+            HttpRequestMessage JobRequest(string vacancyText, string? clientKey = null, string? proof = null)
+            {
+                var req = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/jobs/analyze", UriKind.Relative));
+                if (clientKey is not null)
+                {
+                    req.Headers.TryAddWithoutValidation("X-Client-Key", clientKey);
+                }
+                if (proof is not null)
+                {
+                    req.Headers.TryAddWithoutValidation("X-Client-Key-Proof", proof);
+                }
+                req.Content = new StringContent(
+                    JsonSerializer.Serialize(new { vacancyText }),
+                    Encoding.UTF8,
+                    "application/json");
+                return req;
+            }
+
+            using (var jobValid = JobRequest(
+                "Senior AI Engineer\n- Autonomous Agents architecture\n- Mainframe COBOL legacy ops",
+                jobsVisitorKey,
+                Proof(jobsVisitorKey)))
+            using (var jobValidResponse = await http.SendAsync(jobValid))
+            {
+                Assert.Equal(HttpStatusCode.OK, jobValidResponse.StatusCode);
+                using var jobJson = JsonDocument.Parse(await jobValidResponse.Content.ReadAsStringAsync());
+                Assert.True(jobJson.RootElement.GetProperty("extractedRequirements").GetArrayLength() > 0);
+                Assert.True(jobJson.RootElement.GetProperty("gaps").GetArrayLength() > 0);
+                var assessment = jobJson.RootElement.GetProperty("overallAssessment").GetString();
+                Assert.NotNull(assessment);
+                Assert.Contains("omitted", assessment);
+            }
+
+            using (var jobEmpty = JobRequest("", jobsVisitorKey, Proof(jobsVisitorKey)))
+            using (var jobEmptyResponse = await http.SendAsync(jobEmpty))
+            {
+                Assert.Equal(HttpStatusCode.BadRequest, jobEmptyResponse.StatusCode);
+            }
+
+            var oversizedVacancy = new string('x', 5001);
+            using (var jobOversized = JobRequest(oversizedVacancy, jobsVisitorKey, Proof(jobsVisitorKey)))
+            using (var jobOversizedResponse = await http.SendAsync(jobOversized))
+            {
+                Assert.Equal(HttpStatusCode.BadRequest, jobOversizedResponse.StatusCode);
+            }
+
             // A production host rejects unsigned and forged identities before any
             // rate limiting or Turnstile processing.
             run.Stage = "production host startup";
@@ -320,6 +368,16 @@ public sealed class PublishedBackendSmokeTests
                     "application/json");
                 using var unsignedResponse = await productionHttp.SendAsync(unsigned);
                 Assert.Equal(HttpStatusCode.Forbidden, unsignedResponse.StatusCode);
+            }
+
+            using (var unsignedJob = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/jobs/analyze", UriKind.Relative)))
+            {
+                unsignedJob.Content = new StringContent(
+                    JsonSerializer.Serialize(new { vacancyText = "Senior AI Engineer" }),
+                    Encoding.UTF8,
+                    "application/json");
+                using var unsignedJobResponse = await productionHttp.SendAsync(unsignedJob);
+                Assert.Equal(HttpStatusCode.Forbidden, unsignedJobResponse.StatusCode);
             }
 
             using (var forged = ChatRequest("visitor-198.51.100.97", ComputeWrongProof("visitor-198.51.100.97")))

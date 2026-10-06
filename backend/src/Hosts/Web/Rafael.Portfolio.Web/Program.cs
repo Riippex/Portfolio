@@ -1,5 +1,7 @@
 using Rafael.Portfolio.Modules.Assistant.Application;
 using Rafael.Portfolio.Modules.Assistant.Infrastructure;
+using Rafael.Portfolio.Modules.JobMatching.Application;
+using Rafael.Portfolio.Modules.JobMatching.Infrastructure;
 using Rafael.Portfolio.Modules.Knowledge.Application;
 using Rafael.Portfolio.Modules.Knowledge.Infrastructure;
 using Rafael.Portfolio.Modules.Portfolio.Application;
@@ -49,6 +51,9 @@ builder.Services.AddSingleton<ITurnstileValidator>(sp =>
 builder.Services.AddSingleton<IAssistantEvidenceAdapter, KnowledgeAssistantEvidenceAdapter>();
 builder.Services.AddSingleton<IAssistantSynthesizer, DeterministicGroundedSynthesizer>();
 builder.Services.AddSingleton<IAssistantService, AssistantService>();
+builder.Services.AddSingleton<IJobMatchingEvidenceAdapter, KnowledgeJobMatchingEvidenceAdapter>();
+builder.Services.AddSingleton<IJobDescriptionAnalyzer, DeterministicJobDescriptionAnalyzer>();
+builder.Services.AddSingleton<IJobMatchingService, JobMatchingService>();
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();
@@ -64,6 +69,7 @@ var v1 = app.MapGroup("/v1");
 v1.MapPortfolioEndpoints();
 v1.MapKnowledgeEndpoints();
 v1.MapAssistantEndpoints();
+v1.MapJobMatchingEndpoints();
 
 app.Run();
 
