@@ -18,6 +18,7 @@ public sealed class PublishedBackendSmokeTests
     private static readonly TimeSpan HealthAttemptTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan StartupProbeTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan DrainGrace = TimeSpan.FromSeconds(5);
     private const int CaptureLimit = 4096;
 
     [Fact]
@@ -448,10 +449,17 @@ public sealed class PublishedBackendSmokeTests
 
     private static async Task PublishAsync(SmokeRun run, string webProject, string publishDir)
     {
+        // Reusable build nodes and compiler servers would inherit the capture
+        // pipes and keep them open after publish exits, so disable them.
         var publish = run.Start("dotnet publish", new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"publish \"{webProject}\" -c Release -o \"{publishDir}\""
+            Arguments = $"publish \"{webProject}\" -c Release -o \"{publishDir}\" --no-restore --disable-build-servers",
+            Environment =
+            {
+                ["MSBUILDDISABLENODEREUSE"] = "1",
+                ["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0"
+            }
         });
 
         if (!await publish.WaitForExitAsync(run.Token))
@@ -642,34 +650,40 @@ public sealed class PublishedBackendSmokeTests
             return new ChildProcess(name, process);
         }
 
+        public bool DrainIncomplete { get; private set; }
+
         /// <summary>
-        /// Waits for exit and for both output drains; returns false when the
-        /// token is cancelled first.
+        /// Waits for exit under the token and captures the exit code, then
+        /// completes both output drains within <see cref="DrainGrace"/>.
+        /// Returns false when the token is cancelled before exit; throws when
+        /// the output pipes do not reach EOF after exit.
         /// </summary>
         public async Task<bool> WaitForExitAsync(CancellationToken cancellationToken)
         {
-            try
-            {
-                await process.WaitForExitAsync(cancellationToken);
-                await drains.WaitAsync(cancellationToken);
-                ExitCode = process.ExitCode;
-                return true;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            if (!await WaitForProcessExitAsync(cancellationToken))
             {
                 return false;
             }
+
+            if (!await CompleteDrainsAsync())
+            {
+                throw new InvalidOperationException(
+                    $"The {Name} exited with code {ExitCode} but its output pipes did not reach EOF within {DrainGrace}; a descendant process may still hold them.\n{Describe()}");
+            }
+
+            return true;
         }
 
         /// <summary>
-        /// Kills the entire process tree if needed, awaits exit and both drains,
-        /// then disposes. Returns whether exit completed within the grace period.
+        /// Kills the entire process tree if needed, awaits exit within the grace
+        /// period and the drains within <see cref="DrainGrace"/>, then disposes.
+        /// Returns whether both exit and drain completion succeeded.
         /// </summary>
         public async Task<bool> StopAndAwaitAsync(TimeSpan grace)
         {
             if (disposed)
             {
-                return true;
+                return !DrainIncomplete;
             }
 
             try
@@ -687,20 +701,71 @@ public sealed class PublishedBackendSmokeTests
             }
 
             using var timeout = new CancellationTokenSource(grace);
-            var exited = await WaitForExitAsync(timeout.Token);
-            if (exited)
+            if (!await WaitForProcessExitAsync(timeout.Token))
             {
-                disposed = true;
-                process.Dispose();
+                return false;
             }
 
-            return exited;
+            var drained = await CompleteDrainsAsync();
+            disposed = true;
+            process.Dispose();
+            return drained;
         }
 
         public string Describe()
         {
             var state = ExitCode is { } code ? $"exit code {code}" : HasExited ? "exited" : "running";
-            return $"[{Name}: {state}]\n--- stdout ---\n{Snapshot(stdout)}\n--- stderr ---\n{Snapshot(stderr)}";
+            var drain = DrainIncomplete ? ", output drain abandoned" : string.Empty;
+            return $"[{Name}: {state}{drain}]\n--- stdout ---\n{Snapshot(stdout)}\n--- stderr ---\n{Snapshot(stderr)}";
+        }
+
+        private async Task<bool> WaitForProcessExitAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken);
+                ExitCode = process.ExitCode;
+                return true;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Gives the drains a short, independent grace period to reach EOF after
+        /// exit. If a descendant still holds a pipe, closes the readers so the
+        /// drains end, and reports the abandonment instead of waiting.
+        /// </summary>
+        private async Task<bool> CompleteDrainsAsync()
+        {
+            if (DrainIncomplete)
+            {
+                return false;
+            }
+
+            try
+            {
+                await drains.WaitAsync(DrainGrace);
+                return true;
+            }
+            catch (TimeoutException)
+            {
+            }
+
+            DrainIncomplete = true;
+            process.StandardOutput.Close();
+            process.StandardError.Close();
+            try
+            {
+                await drains.WaitAsync(DrainGrace);
+            }
+            catch (TimeoutException)
+            {
+            }
+
+            return false;
         }
 
         private static async Task DrainAsync(StreamReader reader, StringBuilder sink)
