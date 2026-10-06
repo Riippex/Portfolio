@@ -60,6 +60,33 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
 
     private static readonly string YearNumber = @"(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)";
 
+    // A period only ends a sentence before whitespace or the end, so "Node.js" and
+    // "ASP.NET" stay whole.
+    private static readonly Regex SentenceSeparatorRegex = new(
+        @"(?:[;\r\n]|\.(?=\s|$))+",
+        RegexOptions.Compiled);
+
+    // Words that start an independent or subordinate statement. A duration never
+    // reaches across them, so "Operating GCP while bringing seven years of Java"
+    // gives the seven years to Java only.
+    private static readonly Regex ScopeBoundaryRegex = new(
+        @"\s*,?\s*\b(?:while|whilst|whereas|but|after|before|since|then|when|although|though|however|which|that|where|until)\b\s*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Comma and coordination join the items of one list.
+    private static readonly Regex ListSeparatorRegex = new(
+        @"\s*(?:,|\b(?:and|plus)\b)\s*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Words around a duration that carry no capability ("over seven years of
+    // experience"), used to tell where a duration sits inside its clause.
+    private static readonly HashSet<string> DurationFillerWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "of", "experience", "in", "with", "over", "about", "around", "nearly", "almost", "more", "than",
+        "total", "overall", "professional", "professionally", "for", "the", "a", "an", "combined",
+        "approximately", "roughly", "at", "least", "across", "spanning"
+    };
+
     private static readonly Regex YearsRegex = new(
         $@"(?<![\p{{L}}\p{{N}}])(?<lo>{YearNumber})(?:\s*(?:-|–|to)\s*(?<hi>{YearNumber}))?\s*\+?\s*(?:or\s+more\s+)?(?:years?|yrs?)(?![\p{{L}}\p{{N}}])(?:\s+of)?",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -344,7 +371,7 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         switch (qualifier.Kind)
         {
             case QualifierKind.Years:
-                return YearsRegex.Matches(statement).Any(m => ParseYears(m).Min >= qualifier.MinYears);
+                return ClaimStatesYears(statement, qualifier.MinYears, subjectTerms);
 
             case QualifierKind.Degree:
                 // A named level must be stated exactly (a bachelor's degree never
@@ -367,6 +394,115 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
                 });
         }
     }
+
+    // A duration only counts for the capability it governs. A claim is split into
+    // sentences, then at scope boundaries (while, after, but, which, ...), then into
+    // list items at commas and coordinating words. A duration clause may absorb its
+    // neighbouring list items only when the construction says so:
+    //   - prefix duration ("Seven years building Java, Python and GCP"): the items
+    //     after it are covered by it;
+    //   - suffix duration ("Java, Python and GCP for seven years"): the items
+    //     before it are covered by it;
+    //   - a duration in the middle of its own clause ("bringing seven years of
+    //     Java experience") covers only that clause.
+    // The requested capability must be stated inside the duration's group, so an
+    // unrelated duration elsewhere in a compound claim never satisfies it.
+    private static bool ClaimStatesYears(string statement, int minYears, IReadOnlyList<string> subjectTerms)
+    {
+        if (subjectTerms.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var sentence in SentenceSeparatorRegex.Split(statement))
+        {
+            foreach (var segment in ScopeBoundaryRegex.Split(sentence))
+            {
+                foreach (var (text, minimum) in DurationGroups(segment))
+                {
+                    if (minimum >= minYears && Coverage(subjectTerms, Tokenize(text)) >= RelevanceThreshold)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private enum DurationPosition
+    {
+        Prefix,
+        Suffix,
+        Embedded
+    }
+
+    private static List<(string Text, int Minimum)> DurationGroups(string segment)
+    {
+        var pieces = ListSeparatorRegex.Split(segment)
+            .Select(piece => piece.Trim())
+            .Where(piece => piece.Length > 0)
+            .ToList();
+
+        var groups = new List<(List<string> Parts, int Minimum, DurationPosition Position)>();
+        var leading = new List<string>();
+        foreach (var piece in pieces)
+        {
+            var durations = YearsRegex.Matches(piece);
+            if (durations.Count > 0)
+            {
+                var position = ClassifyDuration(piece, durations[0]);
+                var parts = new List<string>();
+
+                // Items listed before a suffix duration share it; before any other
+                // construction they are unrelated and are dropped.
+                if (position == DurationPosition.Suffix)
+                {
+                    parts.AddRange(leading);
+                }
+
+                leading.Clear();
+                parts.Add(piece);
+
+                // Several durations in one clause cannot be told apart, so only
+                // the smallest is trusted.
+                groups.Add((parts, durations.Select(m => ParseYears(m).Min).Min(), position));
+            }
+            else if (groups.Count > 0)
+            {
+                // Items after a prefix duration share it; after any other
+                // construction they are unrelated and are dropped.
+                if (groups[^1].Position == DurationPosition.Prefix)
+                {
+                    groups[^1].Parts.Add(piece);
+                }
+            }
+            else
+            {
+                leading.Add(piece);
+            }
+        }
+
+        return groups.Select(group => (string.Join(' ', group.Parts), group.Minimum)).ToList();
+    }
+
+    private static DurationPosition ClassifyDuration(string piece, Match duration)
+    {
+        var before = ContentWords(piece[..duration.Index]);
+        var after = ContentWords(piece[(duration.Index + duration.Length)..]);
+
+        if (before == 0 && after > 0)
+        {
+            return DurationPosition.Prefix;
+        }
+
+        return before > 0 && after == 0 ? DurationPosition.Suffix : DurationPosition.Embedded;
+    }
+
+    private static int ContentWords(string text) =>
+        TermRegex.Matches(text.ToLowerInvariant())
+            .Count(m => !DurationFillerWords.Contains(m.Value) && !int.TryParse(m.Value, out _));
 
     private static string DegreeLevel(string text)
     {

@@ -628,4 +628,152 @@ public sealed class JobMatchingServiceTests
             ["Computer vision pipeline ownership", "Autonomous agents design"],
             response.ExtractedRequirements.Select(r => r.RequirementText));
     }
+
+    [Theory]
+    [InlineData("Seven years building Java; one year operating GCP.")]
+    [InlineData("Seven years building Java, one year operating GCP.")]
+    [InlineData("Seven years building Java and one year operating GCP.")]
+    [InlineData("Java for seven years and GCP for one year.")]
+    [InlineData("Seven years building Java. One year operating GCP.")]
+    [InlineData("Two years operating GCP, seven years operating AWS.")]
+    [InlineData("Operating GCP while bringing seven years of Java experience.")]
+    [InlineData("One year operating GCP after seven years building Java.")]
+    [InlineData("One year operating GCP, having spent seven years building Java.")]
+    [InlineData("GCP user, which follows seven years building Java.")]
+    [InlineData("Java, seven years building Python; operating GCP.")]
+    public void Unrelated_duration_in_a_compound_claim_does_not_satisfy_the_requested_capability(string claimStatement)
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Cloud", claimStatement);
+
+        var response = Analyze("Platform Engineer\n- Five years of GCP experience", chunk);
+
+        Assert.Empty(response.DirectMatches);
+        var inference = Assert.Single(response.Inferences);
+        Assert.Equal("claim-vextis-01", inference.SupportingClaimId);
+        Assert.Equal("Five years", Assert.Single(response.Gaps).UnsupportedQualifier);
+    }
+
+    [Theory]
+    [InlineData("Seven years operating GCP.")]
+    [InlineData("Operating GCP for seven years.")]
+    [InlineData("Seven years building Java; six years operating GCP.")]
+    [InlineData("Seven years building Java, six years operating GCP.")]
+    [InlineData("Java for two years and GCP for seven years.")]
+    [InlineData("One year building Java, seven years operating GCP and Terraform.")]
+    public void Duration_that_applies_to_the_requested_capability_is_a_direct_match(string claimStatement)
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Cloud", claimStatement);
+
+        var response = Analyze("Platform Engineer\n- Five years of GCP experience", chunk);
+
+        Assert.Equal("claim-vextis-01", Assert.Single(response.DirectMatches).ClaimId);
+        Assert.Empty(response.Gaps);
+        Assert.Empty(response.Inferences);
+    }
+
+    [Theory]
+    [InlineData("Seven years building Java, Python and GCP.")]
+    [InlineData("Seven years building Java and operating GCP.")]
+    [InlineData("Java, Python and GCP for seven years.")]
+    [InlineData("Seven years of Java, Python, and GCP experience.")]
+    public void One_duration_applies_to_every_capability_it_coordinates(string claimStatement)
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Cloud", claimStatement);
+
+        var response = Analyze("Platform Engineer\n- Five years of GCP experience", chunk);
+
+        Assert.Single(response.DirectMatches);
+        Assert.Empty(response.Gaps);
+    }
+
+    [Fact]
+    public void Each_capability_takes_the_duration_stated_for_it_in_a_multi_duration_claim()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Cloud", "Two years operating GCP, seven years operating AWS.");
+
+        var gcp = Analyze("Platform Engineer\n- Five years of GCP experience", chunk);
+        var aws = Analyze("Platform Engineer\n- Five years of AWS experience", chunk);
+
+        Assert.Empty(gcp.DirectMatches);
+        Assert.Equal("Five years", Assert.Single(gcp.Gaps).UnsupportedQualifier);
+        Assert.Single(aws.DirectMatches);
+        Assert.Empty(aws.Gaps);
+    }
+
+    [Fact]
+    public void A_duration_below_the_requested_minimum_stays_a_gap_even_when_the_capability_matches()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Cloud", "Three years operating GCP.");
+
+        var response = Analyze("Platform Engineer\n- Five years of GCP experience", chunk);
+
+        Assert.Empty(response.DirectMatches);
+        Assert.Equal("Five years", Assert.Single(response.Gaps).UnsupportedQualifier);
+    }
+
+    [Fact]
+    public void Dotted_technology_names_do_not_split_a_sentence()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Web", "Seven years building Node.js services.");
+
+        var response = Analyze("Platform Engineer\n- Five years of Node.js experience", chunk);
+
+        Assert.Single(response.DirectMatches);
+    }
+
+    [Theory]
+    [InlineData("Java")]
+    [InlineData("Python")]
+    [InlineData("GCP")]
+    public void Suffix_duration_applies_to_every_item_of_the_list_before_it(string capability)
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Cloud", "Java, Python, and GCP for seven years.");
+
+        var response = Analyze($"Platform Engineer\n- Five years of {capability} experience", chunk);
+
+        Assert.Equal("claim-vextis-01", Assert.Single(response.DirectMatches).ClaimId);
+        Assert.Empty(response.Gaps);
+    }
+
+    [Theory]
+    [InlineData("Java")]
+    [InlineData("Python")]
+    [InlineData("GCP")]
+    public void Prefix_duration_applies_to_every_item_of_the_list_after_it(string capability)
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Cloud", "Seven years building Java, Python, and GCP.");
+
+        var response = Analyze($"Platform Engineer\n- Five years of {capability} experience", chunk);
+
+        Assert.Equal("claim-vextis-01", Assert.Single(response.DirectMatches).ClaimId);
+        Assert.Empty(response.Gaps);
+    }
+
+    [Fact]
+    public void Items_before_a_prefix_duration_do_not_inherit_it_but_the_governed_capability_does()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Cloud", "Java, seven years operating GCP.");
+
+        var java = Analyze("Platform Engineer\n- Five years of Java experience", chunk);
+        var gcp = Analyze("Platform Engineer\n- Five years of GCP experience", chunk);
+
+        Assert.Empty(java.DirectMatches);
+        Assert.Equal("Five years", Assert.Single(java.Gaps).UnsupportedQualifier);
+        Assert.Single(gcp.DirectMatches);
+        Assert.Empty(gcp.Gaps);
+    }
+
+    [Fact]
+    public void Duration_stated_inside_another_clause_covers_only_that_clause()
+    {
+        var chunk = VerifiedChunkWithClaim("vextis", "Cloud", "Operating GCP while bringing seven years of Java experience.");
+
+        var java = Analyze("Platform Engineer\n- Five years of Java experience", chunk);
+        var gcp = Analyze("Platform Engineer\n- Five years of GCP experience", chunk);
+
+        Assert.Single(java.DirectMatches);
+        Assert.Empty(gcp.DirectMatches);
+        Assert.Equal("claim-vextis-01", Assert.Single(gcp.Inferences).SupportingClaimId);
+        Assert.Equal("Five years", Assert.Single(gcp.Gaps).UnsupportedQualifier);
+    }
 }
