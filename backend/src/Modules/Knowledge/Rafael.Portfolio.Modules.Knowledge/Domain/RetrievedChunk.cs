@@ -14,4 +14,5 @@ public sealed record RetrievedChunk(
     string Version,
     string Visibility,
     double Score,
-    IReadOnlyList<string> Citations);
+    IReadOnlyList<string> Citations,
+    string Kind);

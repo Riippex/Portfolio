@@ -327,6 +327,23 @@ public sealed class PublishedBackendSmokeTests
                 using var jobJson = JsonDocument.Parse(await jobValidResponse.Content.ReadAsStringAsync());
                 Assert.True(jobJson.RootElement.GetProperty("extractedRequirements").GetArrayLength() > 0);
                 Assert.True(jobJson.RootElement.GetProperty("gaps").GetArrayLength() > 0);
+
+                // All published evidence is still pending, so nothing may be a
+                // direct match, and every inference carries a real, inspectable target.
+                Assert.Equal(0, jobJson.RootElement.GetProperty("directMatches").GetArrayLength());
+                var inferences = jobJson.RootElement.GetProperty("inferences").EnumerateArray().ToArray();
+                Assert.NotEmpty(inferences);
+                Assert.All(inferences, inference =>
+                {
+                    // The profile is not a project and must never be addressed as one.
+                    var slug = inference.GetProperty("supportingDocumentSlug").GetString();
+                    Assert.Equal(
+                        slug == "profile" ? "profile" : "project",
+                        inference.GetProperty("supportingDocumentKind").GetString());
+                    Assert.Contains("#", inference.GetProperty("supportingCitation").GetString());
+                    Assert.NotEqual("claim-verified", inference.GetProperty("supportingClaimId").GetString());
+                });
+
                 var assessment = jobJson.RootElement.GetProperty("overallAssessment").GetString();
                 Assert.NotNull(assessment);
                 Assert.Contains("omitted", assessment);

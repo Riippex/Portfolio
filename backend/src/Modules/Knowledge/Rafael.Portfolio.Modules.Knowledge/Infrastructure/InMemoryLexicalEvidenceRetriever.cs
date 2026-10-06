@@ -81,6 +81,7 @@ public sealed class InMemoryLexicalEvidenceRetriever : IEvidenceRetriever
                     doc.Item.Version,
                     doc.Visibility,
                     citations,
+                    doc.Item.Kind,
                     termFrequencies,
                     docLength));
             }
@@ -179,7 +180,8 @@ public sealed class InMemoryLexicalEvidenceRetriever : IEvidenceRetriever
                 x.Chunk.Version,
                 x.Chunk.Visibility,
                 Math.Round(x.Score, 4),
-                x.Chunk.Citations))
+                x.Chunk.Citations,
+                x.Chunk.Kind))
             .ToList();
     }
 
@@ -286,6 +288,7 @@ public sealed class InMemoryLexicalEvidenceRetriever : IEvidenceRetriever
         string Version,
         string Visibility,
         IReadOnlyList<string> Citations,
+        string Kind,
         IReadOnlyDictionary<string, double> TermFrequencies,
         double DocLength);
 }

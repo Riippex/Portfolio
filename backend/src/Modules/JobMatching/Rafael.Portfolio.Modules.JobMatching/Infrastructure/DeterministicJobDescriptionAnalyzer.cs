@@ -6,9 +6,69 @@ namespace Rafael.Portfolio.Modules.JobMatching.Infrastructure;
 
 public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyzer
 {
-    private static readonly Regex BulletRegex = new(
-        @"^[\s]*[-*•\d+.]\s+(.+)$",
+    private const int MaxRequirements = 10;
+    private const int EvidenceLimit = 5;
+    private const string VerifiedStatus = "verified";
+
+    // A chunk or claim supports a requirement only when it covers at least this
+    // share of the requirement's capability terms.
+    private const double RelevanceThreshold = 0.6;
+
+    private static readonly Regex ListItemRegex = new(
+        @"^[ \t]*(?:[-*•]|\d{1,2}[.)])[ \t]+([^\r\n]+?)[ \t]*\r?$",
         RegexOptions.Compiled | RegexOptions.Multiline);
+
+    private static readonly Regex TermRegex = new(@"[\p{L}\p{N}#+]+", RegexOptions.Compiled);
+
+    private static readonly Regex RoleTitleRegex = new(
+        @"^(?:[\p{L}\p{N}.#+/&'-]+\s+){0,4}(?:engineer|developer|architect|manager|scientist|analyst|specialist|consultant|designer|programmer|administrator|lead|intern)s?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly HashSet<string> SectionHeadings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "requirements", "responsibilities", "qualifications", "about the role", "about us", "about the team",
+        "benefits", "nice to have", "must have", "what you'll do", "what you will do", "what we offer",
+        "what we're looking for", "who you are", "skills", "key skills", "job description", "overview", "perks"
+    };
+
+    private static readonly Dictionary<string, int> NumberWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["one"] = 1,
+        ["two"] = 2,
+        ["three"] = 3,
+        ["four"] = 4,
+        ["five"] = 5,
+        ["six"] = 6,
+        ["seven"] = 7,
+        ["eight"] = 8,
+        ["nine"] = 9,
+        ["ten"] = 10
+    };
+
+    private static readonly string YearNumber = @"(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)";
+
+    private static readonly Regex YearsRegex = new(
+        $@"(?<![\p{{L}}\p{{N}}])(?<lo>{YearNumber})(?:\s*(?:-|–|to)\s*(?<hi>{YearNumber}))?\s*\+?\s*(?:or\s+more\s+)?(?:years?|yrs?)(?![\p{{L}}\p{{N}}])(?:\s+of)?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex DegreeRegex = new(
+        @"(?<![\p{L}\p{N}])(?:(?:bachelor|master)'?s?|ph\.?\s?d\.?|doctorate|b\.?sc\.?|m\.?sc\.?|(?:university|college)\s+degree|degree)(?:\s+degree)?(?![\p{L}\p{N}])",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex CertificationRegex = new(
+        @"(?<![\p{L}\p{N}])(?:certified|certifications?|certificates?|pmp|cissp)(?![\p{L}\p{N}])",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Words that frame a requirement without naming a capability.
+    private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a", "an", "and", "or", "the", "of", "in", "on", "for", "with", "to", "using", "use", "as", "at", "by",
+        "is", "are", "be", "will", "you", "we", "our", "your", "from", "that", "this", "such", "including",
+        "strong", "solid", "proven", "hands", "experience", "experienced", "knowledge", "understanding",
+        "familiarity", "ability", "skill", "proficiency", "proficient", "expertise", "expert",
+        "advanced", "working", "work", "year", "plus", "good", "excellent", "preferred", "required", "nice",
+        "have", "has", "etc", "least", "minimum", "more", "than", "demonstrated", "deep", "senior"
+    };
 
     private static readonly (string Name, string Category, string[] Keywords)[] KnownCompetencyDomains =
     [
@@ -21,6 +81,28 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         ("Observability & Reliability", "DevOps & Systems", ["observability", "telemetry", "logging", "monitoring", "metrics", "tracing", "reliability"]),
         ("CI/CD & Containers", "DevOps & Systems", ["docker", "kubernetes", "k8s", "ci/cd", "github actions", "pipeline", "container"])
     ];
+
+    private enum QualifierKind
+    {
+        Years,
+        Degree,
+        Certification
+    }
+
+    private sealed record Qualifier(QualifierKind Kind, string Text, int MinYears);
+
+    private sealed record ParsedRequirement(
+        JobMatchRequirement Requirement,
+        string CapabilityLabel,
+        string SearchText,
+        IReadOnlyList<string> CapabilityTerms,
+        IReadOnlyList<Qualifier> Qualifiers);
+
+    private sealed record ChunkAssessment(
+        JobMatchingEvidenceChunk Chunk,
+        double Coverage,
+        JobMatchingEvidenceClaim? VerifiedClaim,
+        JobMatchingEvidenceClaim? BestClaim);
 
     public JobAnalysisResponse Analyze(JobAnalysisRequest request, IJobMatchingEvidenceAdapter evidenceAdapter)
     {
@@ -35,66 +117,233 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         var inferences = new List<JobInferenceMatch>();
         var gaps = new List<JobGap>();
 
-        foreach (var req in requirements)
+        foreach (var parsed in requirements)
         {
-            var candidates = evidenceAdapter.SearchEvidence(req.RequirementText, limit: 3);
-            var bestScored = candidates.Where(c => c.Score > 0).ToList();
-
-            if (bestScored.Count == 0)
-            {
-                gaps.Add(new JobGap(
-                    RequirementId: req.RequirementId,
-                    RequirementText: req.RequirementText,
-                    Notice: "No documented evidence or claims found for this requirement in Rafael's public portfolio."));
-                continue;
-            }
-
-            var verifiedChunk = bestScored.FirstOrDefault(c =>
-                string.Equals(c.EvidenceStatus, "verified", StringComparison.OrdinalIgnoreCase));
-
-            if (verifiedChunk is not null)
-            {
-                var claimId = verifiedChunk.Claims.FirstOrDefault() ?? "claim-verified";
-                directMatches.Add(new JobEvidenceMatch(
-                    RequirementId: req.RequirementId,
-                    RequirementText: req.RequirementText,
-                    DocumentSlug: verifiedChunk.Slug,
-                    DocumentTitle: verifiedChunk.Title,
-                    SectionHeading: verifiedChunk.SectionHeading,
-                    ClaimId: claimId,
-                    CitationUrl: verifiedChunk.SourceUrl,
-                    EvidenceStatus: verifiedChunk.EvidenceStatus,
-                    GroundingSummary: $"Backed by verified public evidence in {verifiedChunk.Title} ({verifiedChunk.SectionHeading})."));
-            }
-            else
-            {
-                var topChunk = bestScored[0];
-                inferences.Add(new JobInferenceMatch(
-                    RequirementId: req.RequirementId,
-                    RequirementText: req.RequirementText,
-                    InferredCapability: $"Aligned with {topChunk.Title} competency",
-                    SupportingDocumentSlug: topChunk.Slug,
-                    SupportingTitle: topChunk.Title,
-                    SupportingEvidenceStatus: topChunk.EvidenceStatus,
-                    Rationale: $"Documented in project {topChunk.Title} ({topChunk.SectionHeading}); public evidence is currently {topChunk.EvidenceStatus}."));
-            }
+            Classify(parsed, evidenceAdapter, directMatches, inferences, gaps);
         }
 
-        var assessment = BuildOverallAssessment(requirements.Count, directMatches.Count, inferences.Count, gaps.Count);
+        var assessment = BuildOverallAssessment(
+            requirements.Count, directMatches.Count, inferences.Count, gaps.Count);
 
         return new JobAnalysisResponse(
             RoleSummary: roleSummary,
-            ExtractedRequirements: requirements,
+            ExtractedRequirements: requirements.Select(r => r.Requirement).ToList(),
             DirectMatches: directMatches,
             Inferences: inferences,
             Gaps: gaps,
             OverallAssessment: assessment);
     }
 
+    private static void Classify(
+        ParsedRequirement parsed,
+        IJobMatchingEvidenceAdapter evidenceAdapter,
+        List<JobEvidenceMatch> directMatches,
+        List<JobInferenceMatch> inferences,
+        List<JobGap> gaps)
+    {
+        var requirement = parsed.Requirement;
+
+        if (parsed.CapabilityTerms.Count == 0)
+        {
+            // Nothing but a constraint (for example "Bachelor's degree"): there is
+            // no capability to ground, so each qualifier stands as a gap.
+            if (parsed.Qualifiers.Count == 0)
+            {
+                gaps.Add(NoEvidenceGap(requirement));
+            }
+
+            foreach (var qualifier in parsed.Qualifiers)
+            {
+                gaps.Add(QualifierGap(requirement, qualifier));
+            }
+
+            return;
+        }
+
+        var assessments = evidenceAdapter
+            .SearchEvidence(parsed.SearchText, EvidenceLimit)
+            .Where(c => c.Score > 0)
+            .Select(c => Assess(c, parsed.CapabilityTerms))
+            .Where(a => a.Coverage >= RelevanceThreshold)
+            .OrderByDescending(a => a.VerifiedClaim is not null)
+            .ThenByDescending(a => a.Coverage)
+            .ThenByDescending(a => a.Chunk.Score)
+            .ToList();
+
+        if (assessments.Count == 0)
+        {
+            gaps.Add(NoEvidenceGap(requirement));
+            return;
+        }
+
+        var direct = assessments.FirstOrDefault(a => a.VerifiedClaim is not null);
+        var unsupported = direct is null
+            ? parsed.Qualifiers
+            : parsed.Qualifiers.Where(q => !QualifierSupported(q, direct.Chunk)).ToList();
+
+        if (direct is not null && unsupported.Count == 0)
+        {
+            var claim = direct.VerifiedClaim!;
+            directMatches.Add(new JobEvidenceMatch(
+                RequirementId: requirement.RequirementId,
+                RequirementText: requirement.RequirementText,
+                DocumentSlug: direct.Chunk.Slug,
+                DocumentKind: direct.Chunk.Kind,
+                DocumentTitle: direct.Chunk.Title,
+                SectionHeading: direct.Chunk.SectionHeading,
+                SectionSlug: direct.Chunk.SectionSlug,
+                ClaimId: claim.ClaimId,
+                Citation: claim.Citation,
+                CitationUrl: direct.Chunk.SourceUrl,
+                EvidenceStatus: direct.Chunk.EvidenceStatus,
+                GroundingSummary: $"Backed by verified public claim {claim.ClaimId} in {direct.Chunk.Title} ({direct.Chunk.SectionHeading})."));
+            return;
+        }
+
+        var top = direct ?? assessments[0];
+        var topClaim = top.VerifiedClaim ?? top.BestClaim;
+        inferences.Add(new JobInferenceMatch(
+            RequirementId: requirement.RequirementId,
+            RequirementText: requirement.RequirementText,
+            InferredCapability: $"Familiarity with {parsed.CapabilityLabel}",
+            SupportingDocumentSlug: top.Chunk.Slug,
+            SupportingDocumentKind: top.Chunk.Kind,
+            SupportingTitle: top.Chunk.Title,
+            SupportingSectionSlug: top.Chunk.SectionSlug,
+            SupportingCitation: topClaim?.Citation is { Length: > 0 } claimCitation
+                ? claimCitation
+                : top.Chunk.Citations.FirstOrDefault() ?? $"{top.Chunk.DocumentId}#{top.Chunk.SectionSlug}",
+            SupportingClaimId: topClaim?.ClaimId,
+            SupportingEvidenceStatus: top.Chunk.EvidenceStatus,
+            Rationale: BuildInferenceRationale(top, direct is not null, unsupported)));
+
+        foreach (var qualifier in unsupported)
+        {
+            gaps.Add(QualifierGap(requirement, qualifier));
+        }
+    }
+
+    private static string BuildInferenceRationale(
+        ChunkAssessment top,
+        bool capabilityVerified,
+        IReadOnlyList<Qualifier> unsupported)
+    {
+        var chunk = top.Chunk;
+        var rationale = capabilityVerified
+            ? $"The capability is documented by verified claim {top.VerifiedClaim!.ClaimId} in {chunk.Title} ({chunk.SectionHeading})."
+            : chunk.EvidenceStatus.Equals(VerifiedStatus, StringComparison.OrdinalIgnoreCase)
+                ? $"{chunk.Title} ({chunk.SectionHeading}) is verified, but no verified claim covers this requirement directly."
+                : $"Related to {chunk.Title} ({chunk.SectionHeading}); public evidence is currently {chunk.EvidenceStatus}, so this is an inference rather than a verified match.";
+
+        return unsupported.Count == 0
+            ? rationale
+            : $"{rationale} The qualifier {string.Join(", ", unsupported.Select(q => $"\"{q.Text}\""))} is not documented, so it remains a gap.";
+    }
+
+    private static ChunkAssessment Assess(JobMatchingEvidenceChunk chunk, IReadOnlyList<string> capabilityTerms)
+    {
+        var chunkTerms = Tokenize($"{chunk.SectionHeading} {chunk.Title} {chunk.Content} " +
+                                  string.Join(' ', chunk.Claims.Select(c => c.Statement)));
+        var coverage = Coverage(capabilityTerms, chunkTerms);
+
+        JobMatchingEvidenceClaim? bestClaim = null;
+        var bestClaimCoverage = 0.0;
+        JobMatchingEvidenceClaim? verifiedClaim = null;
+        var verifiedClaimCoverage = 0.0;
+        var documentVerified = chunk.EvidenceStatus.Equals(VerifiedStatus, StringComparison.OrdinalIgnoreCase);
+
+        foreach (var claim in chunk.Claims)
+        {
+            if (string.IsNullOrWhiteSpace(claim.ClaimId))
+            {
+                continue;
+            }
+
+            var claimCoverage = Coverage(capabilityTerms, Tokenize($"{claim.Statement} {chunk.SectionHeading}"));
+            if (claimCoverage < RelevanceThreshold)
+            {
+                continue;
+            }
+
+            if (claimCoverage > bestClaimCoverage)
+            {
+                bestClaim = claim;
+                bestClaimCoverage = claimCoverage;
+            }
+
+            // A direct match needs a verified document, a verified claim, and a
+            // resolved citation; anything less is at most an inference.
+            if (documentVerified
+                && claim.Status.Equals(VerifiedStatus, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(claim.Citation)
+                && claimCoverage > verifiedClaimCoverage)
+            {
+                verifiedClaim = claim;
+                verifiedClaimCoverage = claimCoverage;
+            }
+        }
+
+        return new ChunkAssessment(chunk, coverage, verifiedClaim, bestClaim);
+    }
+
+    private static bool QualifierSupported(Qualifier qualifier, JobMatchingEvidenceChunk chunk)
+    {
+        var statements = chunk.Claims
+            .Where(c => c.Status.Equals(VerifiedStatus, StringComparison.OrdinalIgnoreCase))
+            .Select(c => c.Statement)
+            .ToList();
+
+        return qualifier.Kind switch
+        {
+            QualifierKind.Years => statements.Any(s => YearsRegex.Matches(s).Any(m => ParseYears(m).Min >= qualifier.MinYears)),
+            QualifierKind.Degree => statements.Any(s => DegreeRegex.IsMatch(s)),
+            _ => statements.Any(s => CertificationRegex.IsMatch(s))
+        };
+    }
+
+    private static JobGap NoEvidenceGap(JobMatchRequirement requirement) =>
+        new(
+            RequirementId: requirement.RequirementId,
+            RequirementText: requirement.RequirementText,
+            Notice: "No documented evidence or claims found for this requirement in Rafael's public portfolio.");
+
+    private static JobGap QualifierGap(JobMatchRequirement requirement, Qualifier qualifier) =>
+        new(
+            RequirementId: requirement.RequirementId,
+            RequirementText: requirement.RequirementText,
+            Notice: $"The qualifier \"{qualifier.Text}\" is not documented in Rafael's public verified evidence; no claim supports it.",
+            UnsupportedQualifier: qualifier.Text);
+
+    private static double Coverage(IReadOnlyList<string> requirementTerms, HashSet<string> evidenceTerms)
+    {
+        if (requirementTerms.Count == 0)
+        {
+            return 0;
+        }
+
+        return requirementTerms.Count(evidenceTerms.Contains) / (double)requirementTerms.Count;
+    }
+
+    private static HashSet<string> Tokenize(string text)
+    {
+        var terms = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in TermRegex.Matches(text.ToLowerInvariant()))
+        {
+            terms.Add(Normalize(match.Value));
+        }
+
+        return terms;
+    }
+
+    private static string Normalize(string term) =>
+        term.Length > 3 && term.EndsWith('s') && !term.EndsWith("ss", StringComparison.Ordinal)
+            ? term[..^1]
+            : term;
+
     private static string ExtractRoleSummary(string text)
     {
         var firstLine = text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .FirstOrDefault()?.Trim();
+            .FirstOrDefault()?.Trim().TrimStart('#').Trim();
 
         if (string.IsNullOrWhiteSpace(firstLine))
         {
@@ -104,91 +353,174 @@ public sealed class DeterministicJobDescriptionAnalyzer : IJobDescriptionAnalyze
         return firstLine.Length > 100 ? firstLine[..97] + "..." : firstLine;
     }
 
-    private static IReadOnlyList<JobMatchRequirement> ExtractRequirements(string text)
+    private static IReadOnlyList<ParsedRequirement> ExtractRequirements(string text)
     {
-        var requirements = new List<JobMatchRequirement>();
+        var requirements = new List<ParsedRequirement>();
         var seenTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var idCounter = 1;
 
-        // 1. Check bullet points
-        var bulletMatches = BulletRegex.Matches(text);
-        foreach (Match match in bulletMatches)
+        void Add(string requirementText, string? category = null)
         {
-            if (requirements.Count >= 10) break;
-            var lineContent = match.Groups[1].Value.Trim();
-            if (lineContent.Length >= 5 && lineContent.Length <= 200 && seenTexts.Add(lineContent))
+            if (requirements.Count >= MaxRequirements || !seenTexts.Add(requirementText))
             {
-                var category = CategorizeRequirement(lineContent);
-                requirements.Add(new JobMatchRequirement(
-                    RequirementId: $"req-{idCounter++:D2}",
-                    RequirementText: lineContent,
-                    Category: category));
+                return;
+            }
+
+            requirements.Add(Parse(
+                $"req-{requirements.Count + 1:D2}",
+                requirementText,
+                category ?? CategorizeRequirement(requirementText)));
+        }
+
+        // 1. Bulleted or numbered items.
+        foreach (Match match in ListItemRegex.Matches(text))
+        {
+            var content = match.Groups[1].Value.Trim();
+            if (content.Length is >= 5 and <= 200 && !IsHeadingLine(content))
+            {
+                Add(content);
             }
         }
 
-        // 2. Scan known competency domains if no bullets were found
+        // Headings (role titles and section labels) never become requirements.
+        var bodyLines = text
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !IsHeadingLine(line))
+            .ToList();
+        var body = string.Join('\n', bodyLines);
+
+        // 2. Known competency domains mentioned anywhere in the body.
         if (requirements.Count == 0)
         {
             foreach (var (name, category, keywords) in KnownCompetencyDomains)
             {
-                if (requirements.Count >= 10) break;
-                var found = keywords.Any(kw => text.Contains(kw, StringComparison.OrdinalIgnoreCase));
-                if (found && seenTexts.Add(name))
+                if (keywords.Any(keyword => ContainsKeyword(body, keyword)))
                 {
-                    requirements.Add(new JobMatchRequirement(
-                        RequirementId: $"req-{idCounter++:D2}",
-                        RequirementText: name,
-                        Category: category));
+                    Add(name, category);
                 }
             }
         }
 
-        // 3. If still empty, fall back to sentences
+        // 3. Sentences of the body.
         if (requirements.Count == 0)
         {
-            var sentences = text.Split(['.', ';', '\n'], StringSplitOptions.RemoveEmptyEntries);
-            foreach (var s in sentences)
+            foreach (var sentence in body.Split(['.', ';', '\n'], StringSplitOptions.RemoveEmptyEntries))
             {
-                var trimmed = s.Trim();
-                if (trimmed.Length >= 10 && trimmed.Length <= 150 && seenTexts.Add(trimmed))
+                var trimmed = sentence.Trim();
+                if (trimmed.Length is >= 10 and <= 150)
                 {
-                    requirements.Add(new JobMatchRequirement(
-                        RequirementId: $"req-{idCounter++:D2}",
-                        RequirementText: trimmed,
-                        Category: "General"));
-                    if (requirements.Count >= 5) break;
+                    Add(trimmed, "General");
+                    if (requirements.Count >= 5)
+                    {
+                        break;
+                    }
                 }
             }
-        }
-
-        if (requirements.Count == 0)
-        {
-            var fallback = text.Length > 100 ? text[..97] + "..." : text;
-            requirements.Add(new JobMatchRequirement(
-                RequirementId: "req-01",
-                RequirementText: fallback,
-                Category: "General"));
         }
 
         return requirements;
     }
 
+    private static bool IsHeadingLine(string line)
+    {
+        var trimmed = line.Trim();
+        if (trimmed.StartsWith('#') || trimmed.EndsWith(':'))
+        {
+            return true;
+        }
+
+        if (SectionHeadings.Contains(trimmed))
+        {
+            return true;
+        }
+
+        // "Backend Engineer", "Senior AI Engineer (Remote)": a short title that
+        // ends with a role noun and carries no sentence punctuation.
+        var title = Regex.Replace(trimmed, @"\s*\([^)]*\)\s*$", string.Empty);
+        return title.Length <= 60 && RoleTitleRegex.IsMatch(title);
+    }
+
+    private static ParsedRequirement Parse(string requirementId, string requirementText, string category)
+    {
+        var qualifiers = new List<Qualifier>();
+        var capabilityText = requirementText;
+
+        foreach (Match match in YearsRegex.Matches(requirementText))
+        {
+            var (min, text) = ParseYears(match);
+            qualifiers.Add(new Qualifier(QualifierKind.Years, text, min));
+        }
+
+        capabilityText = YearsRegex.Replace(capabilityText, " ");
+
+        foreach (Match match in DegreeRegex.Matches(capabilityText))
+        {
+            qualifiers.Add(new Qualifier(QualifierKind.Degree, match.Value.Trim(), 0));
+        }
+
+        capabilityText = DegreeRegex.Replace(capabilityText, " ");
+
+        foreach (Match match in CertificationRegex.Matches(capabilityText))
+        {
+            qualifiers.Add(new Qualifier(QualifierKind.Certification, match.Value.Trim(), 0));
+        }
+
+        capabilityText = CertificationRegex.Replace(capabilityText, " ");
+
+        // Retrieval sees only the capability words, so a qualifier such as "five
+        // years" can neither drive nor inflate a match.
+        var words = TermRegex.Matches(capabilityText.ToLowerInvariant())
+            .Select(m => m.Value)
+            .Where(t => t.Length > 1 && !Stopwords.Contains(t) && !int.TryParse(t, out _))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var terms = words.Select(Normalize).Distinct(StringComparer.Ordinal).ToList();
+
+        var label = Regex.Replace(capabilityText, @"\s+", " ").Trim(' ', ',', '.', ';', ':', '-');
+        label = Regex.Replace(label, @"^(?:of\s+)+", string.Empty, RegexOptions.IgnoreCase);
+        label = Regex.Replace(label, @"\s+experience$", string.Empty, RegexOptions.IgnoreCase).Trim();
+
+        return new ParsedRequirement(
+            new JobMatchRequirement(requirementId, requirementText, category),
+            label.Length == 0 ? requirementText : label,
+            string.Join(' ', words),
+            terms,
+            qualifiers);
+    }
+
+    private static (int Min, string Text) ParseYears(Match match)
+    {
+        var lo = ParseNumber(match.Groups["lo"].Value);
+        var text = Regex.Replace(match.Value, @"\s+of$", string.Empty, RegexOptions.IgnoreCase).Trim();
+        return (lo, text);
+    }
+
+    private static int ParseNumber(string value) =>
+        int.TryParse(value, out var number) ? number : NumberWords.GetValueOrDefault(value);
+
+    private static bool ContainsKeyword(string text, string keyword) =>
+        Regex.IsMatch(
+            text,
+            $@"(?<![\p{{L}}\p{{N}}]){Regex.Escape(keyword)}(?![\p{{L}}\p{{N}}])",
+            RegexOptions.IgnoreCase);
+
     private static string CategorizeRequirement(string reqText)
     {
-        foreach (var (name, category, keywords) in KnownCompetencyDomains)
+        foreach (var (_, category, keywords) in KnownCompetencyDomains)
         {
-            if (keywords.Any(kw => reqText.Contains(kw, StringComparison.OrdinalIgnoreCase)))
+            if (keywords.Any(keyword => ContainsKeyword(reqText, keyword)))
             {
                 return category;
             }
         }
+
         return "Core Competency";
     }
 
     private static string BuildOverallAssessment(int total, int direct, int inferences, int gaps)
     {
         return $"Analysis of {total} extracted requirements identified {direct} direct verified evidence matches, " +
-               $"{inferences} supported inferences (grounded in pending project catalog items), and {gaps} documented gaps. " +
+               $"{inferences} supported inferences (capabilities grounded in public evidence that is pending or lacks a verified claim), and {gaps} documented gaps. " +
                "In accordance with portfolio policy, artificial numerical percentage scores are omitted to preserve grounding and prevent unsupported precision.";
     }
 }

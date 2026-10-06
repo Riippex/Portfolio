@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { analyzeJob } from "../api";
+import { evidenceTarget } from "../evidence-target";
 import type { JobAnalysisResponse } from "../model";
 
 const SAMPLE_VACANCIES = [
@@ -224,7 +225,9 @@ export function JobMatcher() {
                   <span className="category-count">{result.directMatches.length}</span>
                 </h3>
                 {result.directMatches.length > 0 ? (
-                  result.directMatches.map((m) => (
+                  result.directMatches.map((m) => {
+                    const target = evidenceTarget(m.documentKind, m.documentSlug);
+                    return (
                     <div className="evidence-card" key={m.requirementId}>
                       <div className="card-top">
                         <strong className="card-req">{m.requirementText}</strong>
@@ -232,13 +235,18 @@ export function JobMatcher() {
                       </div>
                       <p className="card-summary">{m.groundingSummary}</p>
                       <div className="card-meta">
-                        <span>Source: {m.documentTitle} ({m.sectionHeading})</span>
-                        <Link href={`/projects/${m.documentSlug}`} className="card-link">
-                          View case study ↗
-                        </Link>
+                        <span>
+                          Source: {m.documentTitle} ({m.sectionHeading}) · Claim {m.claimId} · {m.citation}
+                        </span>
+                        {target && (
+                          <Link href={target.href} className="card-link">
+                            {target.label}
+                          </Link>
+                        )}
                       </div>
                     </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <p className="empty-category-note">
                     No direct verified claims match this requirement set.
@@ -255,7 +263,9 @@ export function JobMatcher() {
                   <span className="category-count">{result.inferences.length}</span>
                 </h3>
                 {result.inferences.length > 0 ? (
-                  result.inferences.map((inf) => (
+                  result.inferences.map((inf) => {
+                    const target = evidenceTarget(inf.supportingDocumentKind, inf.supportingDocumentSlug);
+                    return (
                     <div className="inference-card" key={inf.requirementId}>
                       <div className="card-top">
                         <strong className="card-req">{inf.requirementText}</strong>
@@ -263,13 +273,18 @@ export function JobMatcher() {
                       </div>
                       <p className="card-summary">{inf.rationale}</p>
                       <div className="card-meta">
-                        <span>Associated project: {inf.supportingTitle}</span>
-                        <Link href={`/projects/${inf.supportingDocumentSlug}`} className="card-link">
-                          View project ↗
-                        </Link>
+                        <span>
+                          Supporting evidence: {inf.supportingTitle} · {inf.supportingCitation}
+                        </span>
+                        {target && (
+                          <Link href={target.href} className="card-link">
+                            {target.label}
+                          </Link>
+                        )}
                       </div>
                     </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <p className="empty-category-note">No supported inferences for this set.</p>
                 )}
@@ -285,10 +300,12 @@ export function JobMatcher() {
                 </h3>
                 {result.gaps.length > 0 ? (
                   result.gaps.map((gap) => (
-                    <div className="gap-card" key={gap.requirementId}>
+                    <div className="gap-card" key={`${gap.requirementId}-${gap.unsupportedQualifier ?? "requirement"}`}>
                       <div className="card-top">
                         <strong className="card-req">{gap.requirementText}</strong>
-                        <span className="status-pill undocumented">Not Documented</span>
+                        <span className="status-pill undocumented">
+                          {gap.unsupportedQualifier ? `Not documented: ${gap.unsupportedQualifier}` : "Not Documented"}
+                        </span>
                       </div>
                       <p className="card-summary">{gap.notice}</p>
                     </div>

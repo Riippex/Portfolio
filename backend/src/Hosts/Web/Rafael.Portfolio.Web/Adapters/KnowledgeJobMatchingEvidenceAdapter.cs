@@ -19,11 +19,14 @@ public sealed class KnowledgeJobMatchingEvidenceAdapter : IJobMatchingEvidenceAd
             ChunkId: r.ChunkId,
             DocumentId: r.DocumentId,
             Slug: r.Slug,
+            Kind: r.Kind,
             Title: r.Title,
             SectionHeading: r.SectionHeading,
             SectionSlug: r.SectionSlug,
             Content: r.Content,
-            Claims: r.Claims.Select(c => c.ClaimId).ToList(),
+            Claims: r.Claims
+                .Select(c => new JobMatchingEvidenceClaim(c.ClaimId, c.Statement, c.Status, c.Citation))
+                .ToList(),
             SourceUrl: r.SourceUrl,
             EvidenceStatus: r.EvidenceStatus,
             Version: r.Version,

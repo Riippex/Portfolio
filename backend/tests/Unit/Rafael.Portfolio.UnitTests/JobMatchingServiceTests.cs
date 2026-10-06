@@ -20,7 +20,7 @@ public sealed class JobMatchingServiceTests
                     || c.Title.Contains(t, StringComparison.OrdinalIgnoreCase)
                     || c.SectionHeading.Contains(t, StringComparison.OrdinalIgnoreCase)
                     || c.Slug.Contains(t, StringComparison.OrdinalIgnoreCase)
-                    || c.Claims.Any(cl => cl.Contains(t, StringComparison.OrdinalIgnoreCase)))).ToList();
+                    || c.Claims.Any(cl => cl.Statement.Contains(t, StringComparison.OrdinalIgnoreCase)))).ToList();
         }
     }
 
@@ -31,23 +31,39 @@ public sealed class JobMatchingServiceTests
         string content,
         string status,
         double score = 1.5,
-        string claimId = "claim-01")
+        string claimId = "claim-01",
+        string kind = "project",
+        string? claimStatement = null,
+        string? claimStatus = null,
+        string? claimCitation = null,
+        bool withClaims = true)
     {
+        var sectionSlug = heading.ToLowerInvariant().Replace(' ', '-');
+        var citation = claimCitation ?? $"docs/evidence/{slug}.md#{sectionSlug}";
         return new JobMatchingEvidenceChunk(
             ChunkId: $"{slug}-chunk-01",
             DocumentId: $"evidence-{slug}",
             Slug: slug,
+            Kind: kind,
             Title: title,
             SectionHeading: heading,
-            SectionSlug: heading.ToLowerInvariant().Replace(' ', '-'),
+            SectionSlug: sectionSlug,
             Content: content,
-            Claims: [claimId],
+            Claims: withClaims
+                ? [new JobMatchingEvidenceClaim(claimId, claimStatement ?? content, claimStatus ?? status, citation)]
+                : [],
             SourceUrl: $"https://github.com/example/{slug}",
             EvidenceStatus: status,
             Version: "2026.09",
             Visibility: "public",
             Score: score,
-            Citations: [$"docs/evidence/{slug}.md#{heading.ToLowerInvariant()}"]);
+            Citations: [$"docs/evidence/{slug}.md#{sectionSlug}"]);
+    }
+
+    private static JobAnalysisResponse Analyze(string vacancy, params JobMatchingEvidenceChunk[] chunks)
+    {
+        var service = new JobMatchingService(new FakeEvidenceAdapter(chunks), new DeterministicJobDescriptionAnalyzer());
+        return service.Analyze(new JobAnalysisRequest(vacancy));
     }
 
     [Theory]
@@ -174,5 +190,199 @@ public sealed class JobMatchingServiceTests
         Assert.NotNull(response.OverallAssessment);
         Assert.Contains("numerical percentage scores are omitted", response.OverallAssessment);
         Assert.DoesNotContain("%", response.OverallAssessment);
+    }
+
+    [Fact]
+    public void Unsupported_qualifier_is_kept_as_a_gap_while_the_capability_is_inferred()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Five years of autonomous agents experience",
+            CreateChunk("vextis", "Vextis", "Architecture", "Autonomous agents with sandboxed memory.", "verified", 2.0, "claim-vextis-01"));
+
+        Assert.Empty(response.DirectMatches);
+
+        var inference = Assert.Single(response.Inferences);
+        Assert.Contains("autonomous agents", inference.InferredCapability, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("claim-vextis-01", inference.SupportingClaimId);
+
+        var gap = Assert.Single(response.Gaps);
+        Assert.Equal(inference.RequirementId, gap.RequirementId);
+        Assert.Equal("Five years", gap.UnsupportedQualifier);
+        Assert.Contains("Five years", gap.Notice);
+    }
+
+    [Fact]
+    public void Qualifier_documented_by_a_verified_claim_allows_a_direct_match()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Five years of autonomous agents experience",
+            CreateChunk(
+                "vextis", "Vextis", "Architecture", "Autonomous agents in production.", "verified", 2.0, "claim-vextis-01",
+                claimStatement: "Seven years building autonomous agents in production."));
+
+        var match = Assert.Single(response.DirectMatches);
+        Assert.Equal("claim-vextis-01", match.ClaimId);
+        Assert.Empty(response.Gaps);
+        Assert.Empty(response.Inferences);
+    }
+
+    [Fact]
+    public void Insufficient_years_in_a_claim_do_not_satisfy_the_qualifier()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- 8+ years of autonomous agents",
+            CreateChunk(
+                "vextis", "Vextis", "Architecture", "Autonomous agents in production.", "verified", 2.0, "claim-vextis-01",
+                claimStatement: "Three years building autonomous agents."));
+
+        Assert.Empty(response.DirectMatches);
+        Assert.Single(response.Inferences);
+        Assert.Equal("8+ years", Assert.Single(response.Gaps).UnsupportedQualifier);
+    }
+
+    [Fact]
+    public void Constraint_only_requirements_become_qualifier_gaps()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Master's degree\n- Certification",
+            CreateChunk("vextis", "Vextis", "Architecture", "Autonomous agents with sandboxed memory.", "verified", 2.0));
+
+        Assert.Empty(response.DirectMatches);
+        Assert.Contains(response.Gaps, g => g.UnsupportedQualifier == "Master's degree");
+        Assert.Contains(response.Gaps, g => g.UnsupportedQualifier == "Certification");
+    }
+
+    [Fact]
+    public void Weakly_related_chunks_are_gaps_not_support()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Quantum cryptography hardware design",
+            CreateChunk("kinetiq-v", "Kinetiq V", "Pipeline", "Hardware accelerated computer vision pipeline.", "verified", 2.0));
+
+        Assert.Empty(response.DirectMatches);
+        Assert.Empty(response.Inferences);
+        Assert.Single(response.Gaps);
+    }
+
+    [Fact]
+    public void Role_headings_and_section_labels_are_not_extracted_as_requirements()
+    {
+        var response = Analyze(
+            "Backend Engineer\n\nRequirements:\n1. Computer vision pipeline\n2) Autonomous agents design\n\nBenefits:\n- Remote work",
+            CreateChunk("kinetiq-v", "Kinetiq V", "Pipeline", "Computer vision pipeline.", "verified", 2.0));
+
+        Assert.Equal("Backend Engineer", response.RoleSummary);
+        Assert.Equal(
+            ["Computer vision pipeline", "Autonomous agents design", "Remote work"],
+            response.ExtractedRequirements.Select(r => r.RequirementText));
+        Assert.DoesNotContain(response.ExtractedRequirements, r => r.RequirementText.Contains("Backend Engineer"));
+        Assert.DoesNotContain(response.ExtractedRequirements, r => r.RequirementText.EndsWith(':'));
+    }
+
+    [Theory]
+    [InlineData("Backend Engineer")]
+    [InlineData("## Senior AI Engineer (Remote)")]
+    public void A_vacancy_with_only_a_role_heading_extracts_no_requirements(string vacancy)
+    {
+        var response = Analyze(vacancy);
+
+        Assert.Empty(response.ExtractedRequirements);
+        Assert.Empty(response.DirectMatches);
+        Assert.Empty(response.Inferences);
+        Assert.Empty(response.Gaps);
+    }
+
+    [Fact]
+    public void Prose_vacancy_skips_the_role_heading_line()
+    {
+        var response = Analyze(
+            "Backend Engineer\nWe want someone who knows computer vision pipelines.",
+            CreateChunk("kinetiq-v", "Kinetiq V", "Pipeline", "Computer vision pipeline.", "verified", 2.0));
+
+        Assert.DoesNotContain(response.ExtractedRequirements, r => r.RequirementText == "Backend Engineer");
+        Assert.NotEmpty(response.ExtractedRequirements);
+    }
+
+    [Fact]
+    public void Verified_chunk_without_claims_is_never_direct_evidence()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Autonomous agents architecture",
+            CreateChunk("vextis", "Vextis", "Architecture", "Autonomous agents architecture.", "verified", 2.0, withClaims: false));
+
+        Assert.Empty(response.DirectMatches);
+        var inference = Assert.Single(response.Inferences);
+        Assert.Null(inference.SupportingClaimId);
+        Assert.Equal("docs/evidence/vextis.md#architecture", inference.SupportingCitation);
+        Assert.Contains("no verified claim", inference.Rationale);
+    }
+
+    [Fact]
+    public void Verified_chunk_with_only_a_pending_claim_is_not_direct_evidence()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Autonomous agents architecture",
+            CreateChunk("vextis", "Vextis", "Architecture", "Autonomous agents architecture.", "verified", 2.0, "claim-vextis-01", claimStatus: "pending"));
+
+        Assert.Empty(response.DirectMatches);
+        Assert.Equal("claim-vextis-01", Assert.Single(response.Inferences).SupportingClaimId);
+    }
+
+    [Fact]
+    public void Verified_claim_without_a_citation_is_not_direct_evidence()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Autonomous agents architecture",
+            CreateChunk("vextis", "Vextis", "Architecture", "Autonomous agents architecture.", "verified", 2.0, "claim-vextis-01", claimCitation: " "));
+
+        Assert.Empty(response.DirectMatches);
+        Assert.Single(response.Inferences);
+    }
+
+    [Fact]
+    public void Direct_match_carries_the_real_claim_id_citation_and_target()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Autonomous agents architecture",
+            CreateChunk(
+                "vextis", "Vextis", "Architecture", "Autonomous agents architecture.", "verified", 2.0, "claim-vextis-01",
+                claimCitation: "docs/evidence/projects/vextis.md#architecture"));
+
+        var match = Assert.Single(response.DirectMatches);
+        Assert.Equal("claim-vextis-01", match.ClaimId);
+        Assert.Equal("docs/evidence/projects/vextis.md#architecture", match.Citation);
+        Assert.Equal("project", match.DocumentKind);
+        Assert.Equal("vextis", match.DocumentSlug);
+        Assert.Equal("architecture", match.SectionSlug);
+    }
+
+    [Fact]
+    public void No_response_ever_contains_a_synthetic_claim_identifier()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Autonomous agents architecture\n- Computer vision pipeline",
+            CreateChunk("vextis", "Vextis", "Architecture", "Autonomous agents architecture.", "verified", 2.0, withClaims: false),
+            CreateChunk("kinetiq-v", "Kinetiq V", "Pipeline", "Computer vision pipeline.", "pending", 2.0, "claim-kinetiq-v-01"));
+
+        Assert.DoesNotContain(response.DirectMatches, m => m.ClaimId == "claim-verified");
+        Assert.All(response.Inferences, i => Assert.NotEqual("claim-verified", i.SupportingClaimId));
+    }
+
+    [Fact]
+    public void Profile_evidence_is_identified_as_a_profile_not_a_project()
+    {
+        var response = Analyze(
+            "Platform Engineer\n- Autonomous agents\n- Cloud systems",
+            CreateChunk(
+                "profile", "Rafael Patino", "Focus areas", "Autonomous agents and cloud systems.", "verified", 2.0, "claim-profile-01",
+                kind: "profile", claimCitation: "docs/evidence/profile.md#focus-areas"),
+            CreateChunk(
+                "vextis", "Vextis", "Architecture", "Autonomous agents.", "pending", 1.0, "claim-vextis-01"));
+
+        var direct = response.DirectMatches.First(m => m.DocumentSlug == "profile");
+        Assert.Equal("profile", direct.DocumentKind);
+        Assert.Equal("docs/evidence/profile.md#focus-areas", direct.Citation);
+        Assert.All(response.Inferences, i =>
+            Assert.Equal(i.SupportingDocumentSlug == "profile" ? "profile" : "project", i.SupportingDocumentKind));
     }
 }
