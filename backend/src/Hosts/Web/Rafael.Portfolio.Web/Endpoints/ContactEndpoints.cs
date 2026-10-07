@@ -12,6 +12,7 @@ namespace Rafael.Portfolio.Web.Endpoints;
 public static class ContactEndpoints
 {
     private const int MaxRequestBodySizeBytes = 64 * 1024; // 64 KiB
+    private const int StatusCodeClientClosedRequest = 499;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -34,7 +35,8 @@ public static class ContactEndpoints
             var logger = loggerFactory.CreateLogger("Rafael.Portfolio.Contact");
             var stopwatch = Stopwatch.StartNew();
 
-            // 1. Strict 64 KiB request body limit before unbounded buffering
+            // 1. Strict 64 KiB request body limit, counted in bytes as they arrive, so it
+            // holds without a Content-Length header and for multibyte UTF-8.
             if (httpContext.Request.ContentLength > MaxRequestBodySizeBytes)
             {
                 return Results.Json(
@@ -42,19 +44,27 @@ public static class ContactEndpoints
                     statusCode: StatusCodes.Status413PayloadTooLarge);
             }
 
-            using var reader = new StreamReader(httpContext.Request.Body, Encoding.UTF8);
-            var buffer = new char[MaxRequestBodySizeBytes + 1];
-            var charsRead = await reader.ReadBlockAsync(buffer, 0, buffer.Length);
+            byte[]? bodyBytes;
+            try
+            {
+                bodyBytes = await ReadBoundedBodyAsync(
+                    httpContext.Request.Body,
+                    MaxRequestBodySizeBytes,
+                    httpContext.RequestAborted);
+            }
+            catch (OperationCanceledException) when (httpContext.RequestAborted.IsCancellationRequested)
+            {
+                return Results.StatusCode(StatusCodeClientClosedRequest);
+            }
 
-            if (charsRead > MaxRequestBodySizeBytes || !reader.EndOfStream)
+            if (bodyBytes is null)
             {
                 return Results.Json(
                     new { error = "Request body exceeds the maximum size of 64 KiB." },
                     statusCode: StatusCodes.Status413PayloadTooLarge);
             }
 
-            var bodyText = new string(buffer, 0, charsRead);
-            if (string.IsNullOrWhiteSpace(bodyText))
+            if (IsBlank(bodyBytes))
             {
                 return Results.BadRequest(new { error = "Request body is required." });
             }
@@ -62,7 +72,7 @@ public static class ContactEndpoints
             ContactRelayRequest? request;
             try
             {
-                request = JsonSerializer.Deserialize<ContactRelayRequest>(bodyText, JsonOptions);
+                request = JsonSerializer.Deserialize<ContactRelayRequest>(bodyBytes, JsonOptions);
             }
             catch (JsonException)
             {
@@ -147,6 +157,37 @@ public static class ContactEndpoints
 
         return api;
     }
+
+    // Reads the request body with cancellation-aware asynchronous byte reads. Returns null as
+    // soon as more than maxBytes have arrived, without buffering further. Synchronous I/O is
+    // neither used nor required.
+    internal static async Task<byte[]?> ReadBoundedBodyAsync(
+        Stream body,
+        int maxBytes,
+        CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        var chunk = new byte[Math.Min(maxBytes + 1, 8192)];
+
+        while (true)
+        {
+            var read = await body.ReadAsync(chunk.AsMemory(), cancellationToken);
+            if (read == 0)
+            {
+                return buffer.ToArray();
+            }
+
+            if (buffer.Length + read > maxBytes)
+            {
+                return null;
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+    }
+
+    private static bool IsBlank(byte[] bytes) =>
+        bytes.All(b => b is 0x20 or 0x09 or 0x0D or 0x0A);
 
     private static string HashClientKey(string key)
     {

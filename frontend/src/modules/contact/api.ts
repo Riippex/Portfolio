@@ -1,3 +1,4 @@
+import { parseContactRelaySuccess } from "./model";
 import type { ContactRelayRequest, ContactSubmissionResult } from "./model";
 
 export async function sendContactMessage(
@@ -15,13 +16,19 @@ export async function sendContactMessage(
 
     const data = await res.json().catch(() => null);
 
-    if (res.ok && data?.status) {
+    if (res.ok) {
+      const success = parseContactRelaySuccess(data);
+      if (success) {
+        return { ok: true, data: success };
+      }
+
+      // HTTP success without a documented delivered/queued payload is ambiguous, so it
+      // is reported as a failure; the visitor decides whether to try again.
       return {
-        ok: true,
-        data: {
-          status: data.status,
-          outcome: data.outcome ?? data.status,
-        },
+        ok: false,
+        error: "The contact service returned an unexpected response. Your message may not have been delivered.",
+        status: res.status,
+        outcome: typeof data?.outcome === "string" ? data.outcome : undefined,
       };
     }
 

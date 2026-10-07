@@ -349,7 +349,8 @@ public sealed class CloudflareEmailRelayTests
         Assert.Equal(options.SenderEmail, root.GetProperty("from").GetString());
         Assert.Equal(options.RecipientEmail, root.GetProperty("to").GetString());
         Assert.Equal(msg.Email, root.GetProperty("reply_to").GetString());
-        Assert.Contains(msg.Name, root.GetProperty("subject").GetString());
+        Assert.Equal(CloudflareEmailRelay.Subject, root.GetProperty("subject").GetString());
+        Assert.DoesNotContain(msg.Name, root.GetProperty("subject").GetString());
         Assert.Contains(msg.Message, root.GetProperty("text").GetString());
     }
 }

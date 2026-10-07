@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { acquireTurnstileToken } from "@/modules/assistant/turnstile";
 import { sendContactMessage } from "../api";
 import {
@@ -19,6 +19,9 @@ export function ContactForm() {
   const [consent, setConsent] = useState(false);
   const [state, setState] = useState<FormState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // State updates are asynchronous; the ref closes the window in which two submit events
+  // could both observe an idle form and send the same message twice.
+  const inFlight = useRef(false);
 
   const trimmedName = name.trim();
   const trimmedEmail = email.trim();
@@ -31,43 +34,44 @@ export function ContactForm() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit) return;
+    if (!canSubmit || inFlight.current) return;
 
+    inFlight.current = true;
     setState("submitting");
     setErrorMessage(null);
 
-    // Acquire fresh Turnstile token for this submission attempt
-    const tokenResult = await acquireTurnstileToken();
-    if (tokenResult.kind === "failed") {
-      setState("error");
-      setErrorMessage("Human verification failed or expired. Please try again.");
-      return;
-    }
-
-    const turnstileToken = tokenResult.kind === "token" ? tokenResult.token : undefined;
-
-    const result = await sendContactMessage({
-      name: trimmedName,
-      email: trimmedEmail,
-      message: trimmedMessage,
-      consent,
-      turnstileToken,
-    });
-
-    if (result.ok) {
-      if (result.data.status === "delivered") {
-        setState("delivered");
-      } else {
-        setState("queued");
+    try {
+      // Acquire fresh Turnstile token for this submission attempt
+      const tokenResult = await acquireTurnstileToken();
+      if (tokenResult.kind === "failed") {
+        setState("error");
+        setErrorMessage("Human verification failed or expired. Please try again.");
+        return;
       }
-    } else {
-      if (result.status === 503) {
+
+      const turnstileToken = tokenResult.kind === "token" ? tokenResult.token : undefined;
+
+      // One attempt per user action: there is no automatic retry, because after an
+      // ambiguous outcome the message may already have been delivered.
+      const result = await sendContactMessage({
+        name: trimmedName,
+        email: trimmedEmail,
+        message: trimmedMessage,
+        consent,
+        turnstileToken,
+      });
+
+      if (result.ok) {
+        setState(result.data.status === "delivered" ? "delivered" : "queued");
+      } else if (result.status === 503) {
         setState("unavailable");
         setErrorMessage(result.error);
       } else {
         setState("error");
         setErrorMessage(result.error);
       }
+    } finally {
+      inFlight.current = false;
     }
   }
 
