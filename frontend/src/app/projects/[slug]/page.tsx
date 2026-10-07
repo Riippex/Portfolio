@@ -53,7 +53,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
         </Link>
         <div className="nav-links">
           <Link href="/#work">Work</Link>
-          <Link href="/#assistant">Rafael AI</Link>
+          <Link href="/#assistant">R AI</Link>
           <Link href="/#assistant">Contact</Link>
         </div>
         <span className="status"><i /> Building in public</span>

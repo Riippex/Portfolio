@@ -21,7 +21,7 @@ export default async function Home() {
         </a>
         <div className="nav-links">
           <a href="#work">Work</a>
-          <a href="#assistant">Rafael AI</a>
+          <a href="#assistant">R AI</a>
           <a href="#match">Job Match</a>
           <a href="#contact">Contact</a>
         </div>
@@ -47,7 +47,7 @@ export default async function Home() {
         )}
         <div className="hero-actions">
           <a className="button primary" href="#work">Explore selected work <span>↘</span></a>
-          <a className="button secondary" href="#assistant">Ask Rafael AI <span>⌁</span></a>
+          <a className="button secondary" href="#assistant">Ask R AI <span>⌁</span></a>
         </div>
         <div className="focus-grid" aria-label="Focus areas">
           {profile && profile.focusAreas.length > 0 ? (
@@ -99,7 +99,7 @@ export default async function Home() {
 
       <section id="assistant" className="shell section assistant-section">
         <div className="section-heading">
-          <div><span className="kicker">The interactive layer</span><h2>Meet Rafael AI.</h2></div>
+          <div><span className="kicker">The interactive layer</span><h2>Meet R AI.</h2></div>
           <p>A grounded portfolio agent designed to cite its claims and admit when evidence is missing.</p>
         </div>
         <AssistantChat />

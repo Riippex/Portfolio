@@ -11,7 +11,7 @@ export function AssistantPreview() {
           <span>Why should I hire Rafael for an AI engineering role?</span>
         </div>
         <div className="terminal-line answer">
-          <span className="label">Rafael AI</span>
+          <span className="label">R AI</span>
           <span>
             I’ll compare the role with <strong>documented projects and public evidence</strong>.
             Every material claim will include its source; undocumented experience will be marked as a gap.

@@ -11,7 +11,7 @@ const INITIAL_MESSAGES: readonly AssistantChatMessage[] = [
     id: "welcome",
     role: "assistant",
     content:
-      "I am Rafael AI, an interactive portfolio assistant grounded exclusively in versioned public evidence. Ask about Rafael's systems, focus areas, or architecture patterns.",
+      "I am R AI, an interactive portfolio assistant grounded exclusively in versioned public evidence. Ask about Rafael's systems, focus areas, or architecture patterns.",
   },
 ];
 
@@ -187,7 +187,7 @@ export function AssistantChat() {
             key={msg.id}
             className={`terminal-line ${msg.role === "assistant" ? "answer" : ""}`}
           >
-            <span className="label">{msg.role === "user" ? "You" : "Rafael AI"}</span>
+            <span className="label">{msg.role === "user" ? "You" : "R AI"}</span>
             <div className="message-body">
               <span className="message-text">
                 {msg.content}

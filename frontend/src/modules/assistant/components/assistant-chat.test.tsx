@@ -14,6 +14,7 @@ vi.mock("../turnstile", () => ({
 }));
 
 import { AssistantChat } from "./assistant-chat";
+import { AssistantPreview } from "./assistant-preview";
 
 async function submitQuestion(text: string) {
   const input = screen.getByLabelText("Your question");
@@ -26,6 +27,21 @@ describe("AssistantChat request preparation failures", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it("introduces the assistant as R AI while retaining the portfolio owner's name", () => {
+    render(<AssistantChat />);
+
+    expect(screen.getByText("R AI")).toBeTruthy();
+    expect(screen.getByText(/I am R AI,/).textContent).toContain("Rafael's systems");
+    expect(screen.queryByText(/Rafael AI/)).toBeNull();
+  });
+
+  it("uses R AI in the assistant preview", () => {
+    render(<AssistantPreview />);
+
+    expect(screen.getByText("R AI")).toBeTruthy();
+    expect(screen.queryByText("Rafael AI")).toBeNull();
   });
 
   it("restores the input, drops the placeholder, and shows a retryable error when verification fails", async () => {
