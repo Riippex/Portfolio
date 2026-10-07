@@ -9,6 +9,8 @@ terraform {
   }
 }
 
-provider "cloudflare" {
-  api_token = var.cloudflare_api_token
-}
+# The provider authenticates from the CLOUDFLARE_API_TOKEN environment variable of the
+# operator's shell. There is deliberately no credential in this configuration: a root
+# variable, even a sensitive one, is written into saved plan files, while an environment
+# variable never reaches the plan. See docs/runbooks/infrastructure.md.
+provider "cloudflare" {}

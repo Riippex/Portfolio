@@ -24,6 +24,10 @@ ci_service_account_id              = "sa-portfolio-ci"
 # Bootstrap stage 1 (default): APIs, registry, identities, federation, empty secret containers.
 create_service = false
 
-# Bootstrap stage 3 only, after the secret versions exist and an image has been pushed:
+# Bootstrap stage 3, after the secret versions exist and an image has been pushed: replace the
+# line above with these two and KEEP them in this ignored file. The same file must be passed to
+# every later plan and apply (terraform plan -var-file=<stage>.tfvars). Do not supply them as
+# one-off -var overrides: a plan made without them targets the foundation phase and, with the
+# service established, is refused by prevent_destroy rather than removing it.
 # create_service  = true
 # container_image = "us-central1-docker.pkg.dev/my-gcp-project-id/portfolio/backend:<immutable-tag>"

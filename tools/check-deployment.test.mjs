@@ -19,6 +19,9 @@ const GCP_APIS = "deployment/gcp/apis.tf";
 const GCP_VARS = "deployment/gcp/variables.tf";
 const CF_VARS = "deployment/cloudflare/variables.tf";
 const CF_MAIN = "deployment/cloudflare/main.tf";
+const CF_VERSIONS = "deployment/cloudflare/versions.tf";
+const CF_TFVARS = "deployment/cloudflare/terraform.tfvars.example";
+const GCP_TFVARS = "deployment/gcp/terraform.tfvars.example";
 const WRANGLER = "frontend/wrangler.jsonc";
 const DEPLOY = ".github/workflows/deploy.yml";
 const CI = ".github/workflows/ci.yml";
@@ -111,6 +114,22 @@ const cases = [
   ["deploy runs on push", DEPLOY, replace("on:\n  workflow_dispatch:", "on:\n  push:\n    branches: [main]\n  workflow_dispatch:"), "manual-authorization"],
   ["prod allowed from develop", DEPLOY, replace("dev:refs/heads/develop|prod:refs/heads/main)", "dev:refs/heads/develop|prod:refs/heads/develop)"), "branch-target"],
   ["authorize no longer fails closed", DEPLOY, replace(/\*\)\n\s+echo "::error::Target[^\n]*\n\s+exit 1\n/, "*)\n              ;;\n"), "branch-target"],
+
+  // Provider credentials never become plan inputs
+  ["Cloudflare token variable restored", CF_VARS, append('variable "cloudflare_api_token" {\n  type = string\n}'), "plan-secrets"],
+  ["Cloudflare provider carries a token", CF_VERSIONS, replace('provider "cloudflare" {}', 'provider "cloudflare" {\n  api_token = var.t\n}'), "plan-secrets"],
+  ["Cloudflare token in the example variables", CF_TFVARS, append('cloudflare_api_token = "x"'), "plan-secrets"],
+  ["sensitive root input in GCP", GCP_VARS, append('variable "x" {\n  type      = string\n  sensitive = true\n}'), "plan-secrets"],
+  ["Google provider carries credentials", "deployment/gcp/versions.tf", replace('provider "google" {', 'provider "google" {\n  credentials = "x"'), "plan-secrets"],
+  ["runbook recommends a token in a variable file", RUNBOOK, replace(/CLOUDFLARE_API_TOKEN/g, "TOKEN_VAR"), "plan-secrets"],
+
+  // Foundation-to-service transition
+  ["service can be removed silently", GCP_MAIN, replace("prevent_destroy = true", "prevent_destroy = false"), "service-removal"],
+  ["deletion protection dropped", GCP_MAIN, replace("deletion_protection = true", "deletion_protection = false"), "service-removal"],
+  ["service-phase inputs absent from the example", GCP_TFVARS, replace(/^# create_service\s*=.*$/m, ""), "service-persistence"],
+  ["runbook passes transient overrides", RUNBOOK, append("terraform apply -var create_service=true -var container_image=x"), "service-persistence"],
+  ["runbook drops the persisted var file", RUNBOOK, replace(/-var-file/g, "-vars"), "service-persistence"],
+  ["CI skips the plan proofs", CI, replace("node tools/check-terraform-plans.mjs", "true"), "deploy-gate"],
 
   // Documentation the model depends on
   ["protected environments undocumented", RUNBOOK, replace(/required reviewers/gi, "approvers"), "documentation"],

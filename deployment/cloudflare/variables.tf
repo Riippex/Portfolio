@@ -1,10 +1,3 @@
-variable "cloudflare_api_token" {
-  type        = string
-  description = "Cloudflare API token with Zone, DNS, and Workers Routes permissions. Provider credentials are not stored in Terraform state."
-  sensitive   = true
-  default     = "placeholder-api-token"
-}
-
 variable "zone_id" {
   type        = string
   description = "Cloudflare Zone ID. Required when enable_custom_domain is true."

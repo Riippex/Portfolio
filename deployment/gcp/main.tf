@@ -96,6 +96,10 @@ resource "google_cloud_run_v2_service" "backend" {
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL"
 
+  # Cloud Run refuses to delete the service while this is set, as a second line of defence
+  # behind the plan-time prevent_destroy below.
+  deletion_protection = true
+
   template {
     service_account = google_service_account.backend.email
 
@@ -156,6 +160,14 @@ resource "google_cloud_run_v2_service" "backend" {
   }
 
   lifecycle {
+    # Fail closed against losing an established service. count depends on create_service, so a
+    # plan made without the saved service-phase inputs (create_service = true plus
+    # container_image, kept in the stage's ignored tfvars file and passed to every plan and
+    # apply) would otherwise silently schedule the service and its IAM for removal. With this
+    # set, that plan errors instead. Decommissioning is a deliberate edit: remove this line
+    # and deletion_protection in a reviewed change first (see docs/runbooks/infrastructure.md).
+    prevent_destroy = true
+
     # The deploy workflow owns exactly these. Everything else on the service stays managed.
     ignore_changes = [
       client,

@@ -16,11 +16,13 @@ export const CHECKED_FILES = [
   "deployment/gcp/main.tf",
   "deployment/gcp/outputs.tf",
   "deployment/gcp/variables.tf",
+  "deployment/gcp/versions.tf",
   "deployment/gcp/wif.tf",
   "deployment/gcp/terraform.tfvars.example",
   "deployment/cloudflare/main.tf",
   "deployment/cloudflare/outputs.tf",
   "deployment/cloudflare/variables.tf",
+  "deployment/cloudflare/versions.tf",
   "deployment/cloudflare/terraform.tfvars.example",
   "frontend/wrangler.jsonc",
   ".github/workflows/ci.yml",
@@ -212,6 +214,7 @@ export function checkDeployment(files) {
     apis: stripHcl(need("deployment/gcp/apis.tf")),
     variables: stripHcl(need("deployment/gcp/variables.tf")),
     outputs: stripHcl(need("deployment/gcp/outputs.tf")),
+    versions: stripHcl(need("deployment/gcp/versions.tf")),
   };
   const gcpAll = Object.values(gcp).join("\n");
   const gcpTfvars = need("deployment/gcp/terraform.tfvars.example");
@@ -220,8 +223,10 @@ export function checkDeployment(files) {
     main: stripHcl(need("deployment/cloudflare/main.tf")),
     variables: stripHcl(need("deployment/cloudflare/variables.tf")),
     outputs: stripHcl(need("deployment/cloudflare/outputs.tf")),
+    versions: stripHcl(need("deployment/cloudflare/versions.tf")),
   };
   const cfAll = Object.values(cf).join("\n");
+  const cfTfvars = need("deployment/cloudflare/terraform.tfvars.example");
 
   const ci = stripYaml(need(".github/workflows/ci.yml"));
   const deploy = stripYaml(need(".github/workflows/deploy.yml"));
@@ -474,6 +479,61 @@ export function checkDeployment(files) {
   }
   if (/secrets\./.test(ci)) {
     fail("secret-state", "ci.yml must not use secrets");
+  }
+
+  // 8. Provider credentials never become plan inputs --------------------------------------
+  // A saved plan records root variable values, sensitive or not. Credentials therefore come
+  // from the operator's environment (CLOUDFLARE_API_TOKEN, application default credentials)
+  // and no root variable or provider argument may carry one.
+  const providerBlock = (text, name) => hclBlock(text, new RegExp(`provider\\s+"${name}"`));
+  const cloudflareProvider = providerBlock(cf.versions, "cloudflare");
+  if (cloudflareProvider === null || cloudflareProvider.trim() !== "") {
+    fail("plan-secrets", 'provider "cloudflare" must be empty so it authenticates from the environment');
+  }
+  const googleProvider = providerBlock(gcp.versions, "google") ?? "";
+  if (/credentials|access_token|impersonate_service_account|private_key/.test(googleProvider)) {
+    fail("plan-secrets", 'provider "google" must not carry credentials');
+  }
+  for (const [label, variables] of [["Cloudflare", cf.variables], ["GCP", gcp.variables]]) {
+    if (/sensitive\s*=\s*true/.test(variables) || /variable\s+"[^"]*(token|secret|password|credential|api_key)[^"]*"/i.test(variables)) {
+      fail("plan-secrets", `${label} must have no credential-like or sensitive root variable (saved plans record root inputs)`);
+    }
+  }
+  if (/api_token|cloudflare_api_token/.test(cfAll + cfTfvars)) {
+    fail("plan-secrets", "no Cloudflare API token input may exist in the stack or its example variables");
+  }
+
+  // 9. The foundation-to-service transition is persisted and fails closed ---------------
+  if (!/prevent_destroy\s*=\s*true/.test(serviceBlock)) {
+    fail("service-removal", "the Cloud Run service must set lifecycle prevent_destroy so losing its inputs cannot schedule removal");
+  }
+  if (!/deletion_protection\s*=\s*true/.test(serviceBlock)) {
+    fail("service-removal", "the Cloud Run service must set deletion_protection explicitly");
+  }
+  const tfvarsLines = gcpTfvars.split("\n");
+  // The service-phase block is commented out in the example (the safe default stays false); both
+  // of its lines must be there, with the instruction to keep them for every later plan.
+  const hasServiceLine = (pattern) => tfvarsLines.some((line) => pattern.test(line));
+  if (
+    !hasServiceLine(/^#\s*create_service\s*=\s*true\b/) ||
+    !hasServiceLine(/^#\s*container_image\s*=\s*"/) ||
+    !/KEEP them/.test(gcpTfvars) ||
+    !/^create_service\s*=\s*false\b/m.test(gcpTfvars)
+  ) {
+    fail("service-persistence", "terraform.tfvars.example must default create_service to false and show the service-phase inputs to keep for every plan");
+  }
+  const runbookText = need("docs/runbooks/infrastructure.md");
+  if (/-var[ =]+"?(create_service|container_image)/.test(runbookText)) {
+    fail("service-persistence", "the runbook must not pass the service-phase inputs as transient -var overrides");
+  }
+  if (!/-var-file/.test(runbookText) || !/prevent_destroy/.test(runbookText)) {
+    fail("service-persistence", "the runbook must use a persisted -var-file for every plan and explain the prevent_destroy safeguard");
+  }
+  if (!/CLOUDFLARE_API_TOKEN/.test(runbookText) || /\bcloudflare_api_token\s*=/.test(runbookText)) {
+    fail("plan-secrets", "the runbook must authenticate Cloudflare through the CLOUDFLARE_API_TOKEN environment variable, not a variable file");
+  }
+  if (!/node tools\/check-terraform-plans\.mjs/.test(ci)) {
+    fail("deploy-gate", "ci.yml must run the offline Terraform plan proofs");
   }
 
   // Documentation must state the operating model it relies on ---------------------------

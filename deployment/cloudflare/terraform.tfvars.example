@@ -3,8 +3,10 @@
 # NEVER commit terraform.tfvars containing real credentials.
 # This stack holds no secret payloads: the Worker secret and the Turnstile widget are
 # managed outside Terraform (see docs/runbooks/infrastructure.md).
+#
+# There is no credential input. Authenticate by exporting CLOUDFLARE_API_TOKEN in your shell
+# for the session; never put a token in this file (saved plans record variable values).
 
-cloudflare_api_token = "placeholder-api-token"
 zone_id              = "placeholder-zone-id"
 domain_name          = "rafaelpatinodiaz.com"
 environment          = "dev" # dev -> rafael-portfolio-frontend-dev at dev.<domain>; prod -> ...-prod at the apex

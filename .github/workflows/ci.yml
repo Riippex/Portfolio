@@ -111,6 +111,8 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.15.8'
+          # The plan proofs parse `terraform show -json`; keep the real binary on PATH.
+          terraform_wrapper: false
 
       - name: Check deployment invariants
         run: |
@@ -128,6 +130,11 @@ jobs:
           terraform -chdir=deployment/cloudflare fmt -check
           terraform -chdir=deployment/cloudflare init -backend=false
           terraform -chdir=deployment/cloudflare validate
+
+      # Offline `terraform plan` proofs with synthetic credentials and no provider network:
+      # credentials never reach a saved plan, and losing the service-phase inputs fails closed.
+      - name: Prove plan secrecy and the service transition
+        run: node tools/check-terraform-plans.mjs
 
   skills:
     name: Agent Skills Sync

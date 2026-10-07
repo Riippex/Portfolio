@@ -13,9 +13,9 @@ Reproducible Infrastructure-as-Code (Terraform) for the portfolio architecture. 
 deployment/
 ├── cloudflare/
 │   ├── main.tf                    # Stage hostname DNS record and Worker route
-│   ├── variables.tf               # Stage, Worker name prefix, zone (no secrets)
+│   ├── variables.tf               # Stage, Worker name prefix, zone (no credentials)
 │   ├── outputs.tf                 # Worker name and hostname
-│   ├── versions.tf                # Provider requirements (cloudflare ~> 4.40)
+│   ├── versions.tf                # Provider requirements; empty provider block (env authentication)
 │   └── terraform.tfvars.example   # Example variables template (never commit real tokens)
 └── gcp/
     ├── apis.tf                    # Required service APIs, including federation APIs
@@ -40,8 +40,8 @@ Terraform ignores only the deploy-owned Cloud Run attributes and never declares 
 ## Security and Cost Controls
 
 1. **Production-grade remote runtime**: Cloud Run always runs `ASPNETCORE_ENVIRONMENT=Production`, which requires the signed proxy identity and Turnstile. The stage name (`environment`) never selects it.
-2. **No secrets in Terraform**: containers only. Values are added with `gcloud secrets versions add` and `wrangler secret put`.
-3. **Staged bootstrap**: `create_service = false` first; the service and its service-scoped IAM only after secret versions and an image exist.
+2. **No secrets in Terraform**: containers only. Values are added with `gcloud secrets versions add` and `wrangler secret put`. Provider credentials are not inputs either: Cloudflare authenticates from `CLOUDFLARE_API_TOKEN` in the shell, so nothing credential-like can enter a saved plan.
+3. **Staged bootstrap**: `create_service = false` first; the service and its service-scoped IAM only after secret versions and an image exist. The service-phase inputs are then saved in the stage's ignored variable file and used for every later plan; `prevent_destroy` and deletion protection make a plan without them fail instead of removing the service.
 4. **Scale-to-zero, bounded scaling**: `min_instances = 0`, `max_instances = 2`.
 5. **Least privilege, keyless**: the CI account holds exactly four resource-scoped roles, reached through Workload Identity Federation that trusts one repository, GitHub environment, and branch per stage. No service account keys.
 6. **Gated deployment**: manual only; authorize (target and branch), then validate the exact commit (including the published-backend integration smoke), then deploy. Only the backend job requests `id-token: write`.
@@ -59,6 +59,7 @@ terraform -chdir=deployment/cloudflare init -backend=false && terraform -chdir=d
 
 node --test tools/check-deployment.test.mjs
 node tools/check-deployment.mjs
+node tools/check-terraform-plans.mjs   # offline plan proofs; run both init commands first
 ```
 
 > [!IMPORTANT]

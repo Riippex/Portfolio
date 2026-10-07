@@ -32,7 +32,7 @@ The deployment stage (`dev`, `staging`, `prod`) is a separate input, `environmen
 `docs/data-handling.md` forbids placing secret material in Terraform state, logs, URLs, or build output. `sensitive = true` only hides a value in output; it does not keep it out of state or plans. Therefore:
 
 - Terraform declares no secret versions, no secret bindings, and no resource that computes a secret (the Cloudflare Turnstile widget resource does, so it is not used).
-- The Cloudflare API token passed to the provider is a credential for running Terraform, not a managed resource, and is not stored in state. Supply it through a local, ignored `terraform.tfvars`.
+- **Provider credentials are never Terraform inputs.** A saved plan file records the value of every root variable, sensitive or not, so a token passed as a variable lands in the plan. The Cloudflare provider therefore has an empty configuration and authenticates from the `CLOUDFLARE_API_TOKEN` environment variable of the operator's shell (`export CLOUDFLARE_API_TOKEN=...` for the session, read from a secure store; never a `.tfvars` file, never committed). The Google provider uses application default credentials the same way. The offline plan proofs below show a synthetic token never reaches a saved plan.
 - The deploy build receives only public values. The only secret the deploy workflow uses is `CLOUDFLARE_API_TOKEN`, and only in the Wrangler steps.
 
 ### One shared proxy identity secret
@@ -63,13 +63,28 @@ A fresh project cannot be created in one apply: the service needs an image, the 
 
 **Stage 0: prerequisites.** Project exists with billing attached, and the Service Usage API is enabled (it is on by default). The operator has permission to enable APIs and manage IAM for the one-time apply.
 
-**Stage 1: foundation.** `terraform -chdir=deployment/gcp apply` with `create_service = false`. Creates the required APIs (run, artifact registry, secret manager, iam, iamcredentials, sts, cloud resource manager), the Artifact Registry repository, the runtime and CI service accounts, Workload Identity Federation, and the **empty** secret containers `turnstile-secret-key` and `proxy-identity-secret` with their runtime-scoped accessor bindings. No service exists yet and no contact credential is created.
+**Stage 1: foundation.** `terraform -chdir=deployment/gcp apply -var-file=<stage>.tfvars` with `create_service = false` (the default, and the safe state for a fresh project). Keep one ignored variable file per stage (for example `dev.tfvars`; `*.tfvars` is git-ignored) and pass it to **every** plan and apply. Creates the required APIs (run, artifact registry, secret manager, iam, iamcredentials, sts, cloud resource manager), the Artifact Registry repository, the runtime and CI service accounts, Workload Identity Federation, and the **empty** secret containers `turnstile-secret-key` and `proxy-identity-secret` with their runtime-scoped accessor bindings. No service exists yet and no contact credential is created.
 
 **Stage 2: out of band.** The owner (not Terraform, not CI):
 1. Adds a version to each secret container (`gcloud secrets versions add ...`, previous section). Verify each has an enabled version: `gcloud secrets versions list <secret> --project <project-id>`. Terraform deliberately cannot check this, because reading a secret version would put its payload in state.
 2. Authenticates Docker to the registry and pushes an initial image built from the repository root: `docker build -f backend/Dockerfile -t <region>-docker.pkg.dev/<project-id>/portfolio/backend:<immutable-tag> .`. Use an immutable tag or digest, never `latest`.
 
-**Stage 3: service.** `terraform -chdir=deployment/gcp apply -var create_service=true -var container_image=<the pushed reference>`. Creates the Cloud Run service, the public invoker binding (callers still need the signed identity and Turnstile), and the CI deployer's service-scoped `roles/run.developer`. From here on `container_image` is only the creation image: Terraform ignores the image attribute, so later applies keep whatever the deploy workflow released.
+**Stage 3: service.** First **persist** the service-phase inputs: add both lines to the stage's ignored variable file, then review and apply with that same file.
+
+```hcl
+# dev.tfvars (ignored, kept for the life of the stage)
+create_service  = true
+container_image = "<region>-docker.pkg.dev/<project-id>/portfolio/backend:<immutable-tag>"
+```
+
+```bash
+terraform -chdir=deployment/gcp plan  -var-file=dev.tfvars
+terraform -chdir=deployment/gcp apply -var-file=dev.tfvars
+```
+
+Do not pass these two values as one-off command-line overrides: a later plan made without them would target the foundation phase (`create_service = false`) and silently schedule the service and its IAM for removal. This creates the Cloud Run service, the public invoker binding (callers still need the signed identity and Turnstile), and the CI deployer's service-scoped `roles/run.developer`. From here on `container_image` is only the creation image (Terraform ignores the image attribute, so later applies keep whatever the deploy workflow released), but it must stay set.
+
+**Safeguards against losing an established service.** The service sets `lifecycle { prevent_destroy = true }` and `deletion_protection = true`. If a plan is ever made without the saved inputs, it fails closed instead of removing anything: `create_service = false` errors with `Instance cannot be destroyed`, and `create_service = true` without `container_image` errors with a precondition. A `terraform plan -destroy` is refused too. Retiring the service is a deliberate, reviewed change: remove both settings in a commit, apply that, and only then change `create_service`.
 
 After a deploy, `terraform plan` should show no change to the image or deploy metadata. If Cloud Run records additional deploy-time attributes that Terraform now reports, extend the ignore list with the single attribute, never the whole service.
 
@@ -148,6 +163,7 @@ terraform -chdir=deployment/cloudflare init -backend=false && terraform -chdir=d
 
 node --test tools/check-deployment.test.mjs  # proves each invariant by breaking it
 node tools/check-deployment.mjs         # checks the real definitions and workflows
+node tools/check-terraform-plans.mjs    # offline plan proofs (needs both `init -backend=false` runs)
 
 cd frontend
 for stage in dev prod; do
@@ -157,7 +173,9 @@ for stage in dev prod; do
 done
 ```
 
-`check-deployment.mjs` enforces, among others: a Production-only remote runtime; no secret payloads or Worker script in Terraform; the narrow image ignore list; the bootstrap gate; the federation APIs and dependencies; exactly the four deployer roles; `id-token: write` only on the backend job; and validation, branch pairing, and a single secret in the deploy workflow.
+`check-terraform-plans.mjs` runs `terraform plan` only, with synthetic credentials, `-refresh=false`, a hand-built state, a closed proxy port so any provider call would fail loudly, and plan files kept outside the repository. It proves that (1) a synthetic Cloudflare token supplied through the environment appears nowhere in the saved plan (archive entries, JSON, text), while the same scanner does find a token passed as a root variable; and (2) for the real GCP stack, the fresh default creates no service, the persisted service-phase inputs keep an established service with no destroy, and losing `create_service`, `container_image`, or both, or planning a destroy, is refused.
+
+`check-deployment.mjs` enforces, among others: a Production-only remote runtime; no secret payloads, credential inputs, or Worker script in Terraform; `prevent_destroy` and deletion protection on the service; the narrow image ignore list; the bootstrap gate; the federation APIs and dependencies; exactly the four deployer roles; `id-token: write` only on the backend job; and validation, branch pairing, and a single secret in the deploy workflow.
 
 ## Activation checklist (owner and Codex console)
 
@@ -166,7 +184,7 @@ done
 - [ ] Shared proxy identity secret added to Secret Manager **and** to the target Worker with `wrangler secret put`.
 - [ ] Turnstile widget created in the console; secret key in Secret Manager; site key in the GitHub variable.
 - [ ] Secret versions verified with `gcloud secrets versions list`; initial image pushed (immutable tag).
-- [ ] Bootstrap stage 3 applied with `create_service = true`.
+- [ ] Service-phase inputs saved in the stage's ignored variable file, then bootstrap stage 3 applied with that file (`create_service = true`).
 - [ ] GitHub `dev` and `prod` environments created with required reviewers, deployment branches, variables, and `CLOUDFLARE_API_TOKEN`.
 - [ ] First dispatch of the deploy workflow reviewed and approved.
 - [ ] Cloudflare route applied after the Worker exists; DNS and Turnstile hostnames verified.
