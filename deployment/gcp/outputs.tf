@@ -1,6 +1,6 @@
 output "backend_uri" {
-  description = "Assigned URI for the Cloud Run backend service"
-  value       = google_cloud_run_v2_service.backend.uri
+  description = "Assigned URI for the Cloud Run backend service (null until create_service is true)"
+  value       = one(google_cloud_run_v2_service.backend[*].uri)
 }
 
 output "artifact_registry_repository_id" {
@@ -14,12 +14,8 @@ output "service_account_email" {
 }
 
 output "secret_manager_secret_ids" {
-  description = "Map of created secret IDs in Google Secret Manager"
-  value = {
-    turnstile_secret_key  = google_secret_manager_secret.turnstile_secret_key.secret_id
-    proxy_identity_secret = google_secret_manager_secret.proxy_identity_secret.secret_id
-    contact_api_token     = google_secret_manager_secret.contact_api_token.secret_id
-  }
+  description = "Secret container IDs the owner populates out of band (names only, never values)"
+  value       = { for key, secret in google_secret_manager_secret.runtime : key => secret.secret_id }
 }
 
 output "workload_identity_provider" {

@@ -12,8 +12,19 @@ variable "region" {
 
 variable "environment" {
   type        = string
-  description = "Deployment environment name (dev, staging, prod)"
+  description = "Deployment stage name (dev, staging, prod). It names and labels resources and selects the branch the CI identity trusts. It never selects the ASP.NET runtime environment, which is always Production on Cloud Run."
   default     = "dev"
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "environment must be one of: dev, staging, prod."
+  }
+}
+
+variable "create_service" {
+  type        = bool
+  description = "Bootstrap gate. Leave false for the first apply (APIs, registry, identities, secret containers). Set true only after the owner has populated the required secret versions and pushed an image, so the service and its service-scoped IAM can be created."
+  default     = false
 }
 
 variable "service_name" {
@@ -36,8 +47,14 @@ variable "artifact_repository_id" {
 
 variable "container_image" {
   type        = string
-  description = "Container image URI for Rafael.Portfolio.Web (built via root Dockerfile)"
-  default     = "us-central1-docker.pkg.dev/rafael-portfolio-dev/portfolio/backend:latest"
+  description = "Immutable reference (tag or digest, never :latest) of an image that already exists in Artifact Registry. It is used only to create the service; later releases are owned by the deploy workflow and Terraform ignores the image afterwards."
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = !endswith(var.container_image, ":latest")
+    error_message = "container_image must be an immutable tag or digest, not :latest."
+  }
 }
 
 variable "backend_port" {
@@ -72,7 +89,7 @@ variable "memory_limit" {
 
 variable "allow_unauthenticated" {
   type        = bool
-  description = "Whether to allow unauthenticated invocations (ingress routed via Cloudflare proxy)"
+  description = "Whether to allow unauthenticated invocations. The backend enforces the signed proxy identity and Turnstile itself, so the edge Worker is the only intended caller."
   default     = true
 }
 

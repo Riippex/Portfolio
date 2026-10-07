@@ -1,8 +1,8 @@
-# Google Cloud Service API required for IAM and Workload Identity
-resource "google_project_service" "iam" {
-  project            = var.project_id
-  service            = "iam.googleapis.com"
-  disable_on_destroy = false
+locals {
+  # Each stage trusts exactly one branch: dev and staging deploy from develop, prod from main.
+  # The GitHub environment name must equal var.environment, so a token minted for another
+  # target or branch cannot impersonate this project's deployer.
+  trusted_ref = var.environment == "prod" ? "refs/heads/main" : "refs/heads/develop"
 }
 
 # Workload Identity Pool for GitHub Actions OIDC federation
@@ -13,7 +13,7 @@ resource "google_iam_workload_identity_pool" "github_pool" {
   description               = "Workload Identity Pool for GitHub Actions CI/CD workflows"
 
   depends_on = [
-    google_project_service.iam
+    google_project_service.required
   ]
 }
 
@@ -31,10 +31,11 @@ resource "google_iam_workload_identity_pool_provider" "github_provider" {
     "attribute.repository"       = "assertion.repository"
     "attribute.repository_owner" = "assertion.repository_owner"
     "attribute.ref"              = "assertion.ref"
+    "attribute.environment"      = "assertion.environment"
   }
 
-  # Attribute condition enforcing strict least-privilege repository and branch trust boundary
-  attribute_condition = "assertion.repository == '${var.github_repository}' && (assertion.ref == 'refs/heads/develop' || assertion.ref == 'refs/heads/main')"
+  # Repository, GitHub environment, and branch must all match this stage.
+  attribute_condition = "assertion.repository == '${var.github_repository}' && assertion.environment == '${var.environment}' && assertion.ref == '${local.trusted_ref}'"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
@@ -47,13 +48,22 @@ resource "google_service_account" "ci_deployer" {
   account_id   = var.ci_service_account_id
   display_name = "Portfolio CI Deployer"
   description  = "Least-privilege service account impersonated by GitHub Actions via Workload Identity Federation"
+
+  depends_on = [
+    google_project_service.required
+  ]
 }
 
-# Allow GitHub Actions matching the repository attribute to impersonate the CI deployer SA
+# Allow GitHub Actions matching the repository attribute to impersonate the CI deployer SA.
+# Impersonation needs the STS and Service Account Credentials APIs, enabled in apis.tf.
 resource "google_service_account_iam_member" "workload_identity_user" {
   service_account_id = google_service_account.ci_deployer.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/${var.github_repository}"
+
+  depends_on = [
+    google_project_service.required
+  ]
 }
 
 # Least-privilege role 1: Push images to Artifact Registry
@@ -65,11 +75,13 @@ resource "google_artifact_registry_repository_iam_member" "ci_image_pusher" {
   member     = "serviceAccount:${google_service_account.ci_deployer.email}"
 }
 
-# Least-privilege role 2: Deploy new revisions to Cloud Run
+# Least-privilege role 2: Deploy new revisions to the Cloud Run service (second bootstrap stage)
 resource "google_cloud_run_v2_service_iam_member" "ci_service_deployer" {
+  count = var.create_service ? 1 : 0
+
   project  = var.project_id
   location = var.region
-  name     = google_cloud_run_v2_service.backend.name
+  name     = google_cloud_run_v2_service.backend[0].name
   role     = "roles/run.developer"
   member   = "serviceAccount:${google_service_account.ci_deployer.email}"
 }

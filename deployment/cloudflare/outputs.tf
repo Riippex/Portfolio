@@ -1,15 +1,9 @@
-output "turnstile_site_key" {
-  description = "Public Turnstile site key to embed in frontend"
-  value       = cloudflare_turnstile_widget.portfolio.id
-}
-
-output "turnstile_secret_key" {
-  description = "Turnstile secret key to configure in GCP Secret Manager"
-  value       = cloudflare_turnstile_widget.portfolio.secret
-  sensitive   = true
-}
-
 output "worker_name" {
-  description = "Cloudflare Worker service name"
-  value       = cloudflare_workers_script.frontend.name
+  description = "Name of the frontend Worker this stage routes to (must match the Worker published by the deploy workflow)"
+  value       = local.worker_name
+}
+
+output "hostname" {
+  description = "Hostname routed to the frontend Worker for this stage"
+  value       = local.hostname
 }

@@ -1,50 +1,48 @@
-# Cloudflare Turnstile CAPTCHA widget for bot and abuse mitigation
-resource "cloudflare_turnstile_widget" "portfolio" {
-  account_id = var.account_id
-  name       = "rafael-portfolio-${var.environment}"
-  domains    = [var.domain_name, "localhost"]
-  mode       = "managed"
-  region     = "world"
+# ---------------------------------------------------------------------------
+# Ownership
+#
+# Terraform owns the zone routing for the frontend: the stage hostname's DNS record and the
+# Worker route that points it at the deployed Worker.
+#
+# Terraform does NOT own, and must not be extended to own:
+#   - the Worker script, its runtime variables, or its secrets. `wrangler deploy` publishes
+#     the application and writes the public runtime variable PORTFOLIO_BACKEND_URL. The
+#     proxy identity secret (ASSISTANT_PROXY_IDENTITY_SECRET) is set out of band on the
+#     exact Worker with `wrangler secret put`. Keeping them out of Terraform means an
+#     infrastructure apply can neither replace released code nor persist a secret in state.
+#   - the Turnstile widget. It is created in the Cloudflare console because the provider
+#     stores the widget's computed secret in state. Only the public site key is used, as the
+#     NEXT_PUBLIC_TURNSTILE_SITE_KEY build variable.
+# ---------------------------------------------------------------------------
+
+locals {
+  # Same derivation as the env name in frontend/wrangler.jsonc.
+  worker_name = "${var.worker_name_prefix}-${var.environment}"
+  hostname    = var.environment == "prod" ? var.domain_name : "${var.environment}.${var.domain_name}"
+  record_name = var.environment == "prod" ? "@" : var.environment
+  routing     = var.enable_custom_domain && var.zone_id != ""
 }
 
-# Cloudflare Workers script definition for the Next.js frontend
-resource "cloudflare_workers_script" "frontend" {
-  account_id          = var.account_id
-  name                = var.worker_name
-  content             = file("${path.module}/scripts/worker_placeholder.js")
-  module              = true
-  compatibility_date  = "2026-09-24"
-  compatibility_flags = ["nodejs_compat"]
-
-  plain_text_binding {
-    name = "PORTFOLIO_BACKEND_URL"
-    text = var.backend_url
-  }
-
-  plain_text_binding {
-    name = "NEXT_PUBLIC_TURNSTILE_SITE_KEY"
-    text = cloudflare_turnstile_widget.portfolio.id
-  }
-
-  secret_text_binding {
-    name = "ASSISTANT_PROXY_IDENTITY_SECRET"
-    text = var.proxy_identity_secret
+check "custom_domain_inputs" {
+  assert {
+    condition     = !var.enable_custom_domain || var.zone_id != ""
+    error_message = "enable_custom_domain requires zone_id; no DNS record or route will be created without it."
   }
 }
 
-# Worker route binding to the apex custom domain (optional until domain is verified)
+# Worker route for the stage hostname. The Worker must already be deployed under local.worker_name.
 resource "cloudflare_workers_route" "custom_domain" {
-  count       = var.enable_custom_domain && var.zone_id != "" ? 1 : 0
+  count       = local.routing ? 1 : 0
   zone_id     = var.zone_id
-  pattern     = "${var.domain_name}/*"
-  script_name = cloudflare_workers_script.frontend.name
+  pattern     = "${local.hostname}/*"
+  script_name = local.worker_name
 }
 
-# DNS record for apex domain pointing to Cloudflare edge proxy
-resource "cloudflare_record" "apex" {
-  count   = var.enable_custom_domain && var.zone_id != "" ? 1 : 0
+# Proxied DNS record so the stage hostname reaches the Cloudflare edge
+resource "cloudflare_record" "stage_hostname" {
+  count   = local.routing ? 1 : 0
   zone_id = var.zone_id
-  name    = "@"
+  name    = local.record_name
   type    = "A"
   content = "192.0.2.1"
   proxied = true

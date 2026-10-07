@@ -1,66 +1,65 @@
 # Infrastructure Deployment
 
-This directory contains reproducible Infrastructure-as-Code (Terraform) definitions for the portfolio architecture.
+Reproducible Infrastructure-as-Code (Terraform) for the portfolio architecture. The operating model, bootstrap order, and activation checklist are in [docs/runbooks/infrastructure.md](../docs/runbooks/infrastructure.md); this file is the map.
 
 ## Provider Split
 
-- `cloudflare/`: Edge proxy, DNS, Cloudflare Turnstile bot protection, and Next.js frontend Worker bindings.
-- `gcp/`: Google Cloud Run serverless host for `.NET 10` modular monolith (`Rafael.Portfolio.Web`), Artifact Registry container repository, Secret Manager, Workload Identity Federation, and dedicated service accounts.
+- `cloudflare/`: zone routing for the frontend only: the stage hostname DNS record and the route to the deployed Worker. It does not manage the Worker script, its variables or secrets, or the Turnstile widget.
+- `gcp/`: the Google Cloud Run host for the `.NET 10` modular monolith (`Rafael.Portfolio.Web`), Artifact Registry, empty Secret Manager containers, the required service APIs, Workload Identity Federation, and the runtime and CI service accounts.
 
 ## Directory Structure
 
 ```text
 deployment/
 ├── cloudflare/
-│   ├── main.tf                    # Turnstile widget, Worker script, routes, DNS
-│   ├── variables.tf               # Parameterized inputs (account ID, domain, backend URL)
-│   ├── outputs.tf                 # Turnstile site key, secret, and worker name
+│   ├── main.tf                    # Stage hostname DNS record and Worker route
+│   ├── variables.tf               # Stage, Worker name prefix, zone (no secrets)
+│   ├── outputs.tf                 # Worker name and hostname
 │   ├── versions.tf                # Provider requirements (cloudflare ~> 4.40)
-│   ├── terraform.tfvars.example   # Example variables template (never commit real tokens)
-│   └── scripts/
-│       └── worker_placeholder.js  # Build scaffold placeholder
+│   └── terraform.tfvars.example   # Example variables template (never commit real tokens)
 └── gcp/
-    ├── main.tf                    # Cloud Run v2, Artifact Registry, Secret Manager, IAM
+    ├── apis.tf                    # Required service APIs, including federation APIs
+    ├── main.tf                    # Registry, runtime account, secret containers, Cloud Run (gated)
     ├── wif.tf                     # Workload Identity Pool, Provider, and CI deployer IAM
-    ├── variables.tf               # Parameterized inputs (project, region, scaling, WIF)
-    ├── outputs.tf                 # Cloud Run URI, repo ID, WIF provider name, SA emails
+    ├── variables.tf               # Inputs, including the create_service bootstrap gate
+    ├── outputs.tf                 # Service URI, repository, WIF provider, service accounts
     ├── versions.tf                # Provider requirements (google ~> 6.0)
     └── terraform.tfvars.example   # Example variables template (never commit real credentials)
 ```
 
+Outside this directory: `frontend/wrangler.jsonc` (per-stage Worker names), `.github/workflows/` (CI and the gated manual deploy), and `tools/check-deployment.mjs` with `tools/check-wrangler-build.mjs` (offline regression checks).
+
+## Ownership
+
+| Terraform owns | The deploy workflow owns | The owner owns, out of band |
+|---|---|---|
+| APIs, registry, identities, federation, secret containers, Cloud Run shape (scaling, limits, ingress, environment, secret references, IAM), zone route and DNS | Cloud Run image (SHA-tagged), Worker code, `PORTFOLIO_BACKEND_URL` | Every secret value, the Turnstile widget, GitHub environment protection |
+
+Terraform ignores only the deploy-owned Cloud Run attributes and never declares the Worker script, so infrastructure maintenance cannot replace a release.
+
 ## Security and Cost Controls
 
-1. **Scale-to-zero defaults**: Cloud Run `min_instances` defaults to `0` to prevent baseline idle costs.
-2. **Bounded scaling**: `max_instances` defaults to `2` to mitigate cost drivers and denial-of-wallet spikes.
-3. **Least privilege**:
-   - Runtime Service Account (`sa-portfolio-backend`): Strictly granted `roles/secretmanager.secretAccessor` only on declared secrets.
-   - CI Deployer Service Account (`sa-portfolio-ci`): Strictly granted `roles/artifactregistry.writer` on the backend repository, `roles/run.developer` on the Cloud Run service, and `roles/iam.serviceAccountUser` on the runtime account.
-4. **Zero static keys (OIDC)**: Workload Identity Federation allows GitHub Actions to exchange short-lived tokens. No long-lived service account keys (`credentials_json`) are created or permitted.
-5. **Scoped Trust Boundary**: The Workload Identity Provider strictly asserts:
-   `assertion.repository == 'Riippex/Portfolio' && (assertion.ref == 'refs/heads/develop' || assertion.ref == 'refs/heads/main')`.
-6. **Zero application persistence**: No database or durable storage is provisioned in this slice, maintaining the established zero-persistence baseline.
-7. **Secret management**:
-   - Cloudflare API tokens, Turnstile secret keys, and proxy identity HMAC secrets are kept in provider secret stores and GitHub environment secrets.
-   - Example files (`*.tfvars.example`) contain non-sensitive placeholders.
-   - Real `*.tfvars` and `*.tfstate` files are ignored by git.
+1. **Production-grade remote runtime**: Cloud Run always runs `ASPNETCORE_ENVIRONMENT=Production`, which requires the signed proxy identity and Turnstile. The stage name (`environment`) never selects it.
+2. **No secrets in Terraform**: containers only. Values are added with `gcloud secrets versions add` and `wrangler secret put`.
+3. **Staged bootstrap**: `create_service = false` first; the service and its service-scoped IAM only after secret versions and an image exist.
+4. **Scale-to-zero, bounded scaling**: `min_instances = 0`, `max_instances = 2`.
+5. **Least privilege, keyless**: the CI account holds exactly four resource-scoped roles, reached through Workload Identity Federation that trusts one repository, GitHub environment, and branch per stage. No service account keys.
+6. **Gated deployment**: manual only; authorize (target and branch), then validate the exact commit (including the published-backend integration smoke), then deploy. Only the backend job requests `id-token: write`.
+7. **Zero application persistence**: no database or durable storage.
+8. **Ignored local state**: real `*.tfvars` and `*.tfstate` are git-ignored; example files hold placeholders.
 
 ## Local Validation
 
-Verify Terraform definitions without mutating cloud infrastructure:
+Verify the definitions without touching any provider:
 
 ```bash
-# Validate GCP definitions
-cd deployment/gcp
-terraform fmt -check
-terraform init -backend=false
-terraform validate
+terraform fmt -check -recursive deployment
+terraform -chdir=deployment/gcp init -backend=false && terraform -chdir=deployment/gcp validate
+terraform -chdir=deployment/cloudflare init -backend=false && terraform -chdir=deployment/cloudflare validate
 
-# Validate Cloudflare definitions
-cd ../cloudflare
-terraform fmt -check
-terraform init -backend=false
-terraform validate
+node --test tools/check-deployment.test.mjs
+node tools/check-deployment.mjs
 ```
 
 > [!IMPORTANT]
-> Authoring Terraform definitions does not imply permission to apply them. Only the project owner and Codex run commands that access live provider state or mutate cloud credentials.
+> Authoring Terraform definitions does not imply permission to apply them. Only the project owner and Codex run commands that access live provider state, mutate cloud credentials, or deploy.

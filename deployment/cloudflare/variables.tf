@@ -1,19 +1,13 @@
 variable "cloudflare_api_token" {
   type        = string
-  description = "Cloudflare API token with Workers, DNS, and Turnstile permissions"
+  description = "Cloudflare API token with Zone, DNS, and Workers Routes permissions. Provider credentials are not stored in Terraform state."
   sensitive   = true
   default     = "placeholder-api-token"
 }
 
-variable "account_id" {
-  type        = string
-  description = "Cloudflare Account ID"
-  default     = "placeholder-account-id"
-}
-
 variable "zone_id" {
   type        = string
-  description = "Cloudflare Zone ID (optional if DNS is managed separately)"
+  description = "Cloudflare Zone ID. Required when enable_custom_domain is true."
   default     = ""
 }
 
@@ -25,31 +19,23 @@ variable "domain_name" {
 
 variable "environment" {
   type        = string
-  description = "Deployment environment name (dev, staging, prod)"
+  description = "Deployment stage (dev or prod). Selects the Worker name and hostname; it must match the stage the deploy workflow builds and deploys."
   default     = "dev"
+
+  validation {
+    condition     = contains(["dev", "prod"], var.environment)
+    error_message = "environment must be one of: dev, prod."
+  }
 }
 
-variable "worker_name" {
+variable "worker_name_prefix" {
   type        = string
-  description = "Cloudflare Worker name for the Next.js frontend"
+  description = "Base name of the frontend Worker. The deployed Worker is \"<prefix>-<environment>\", which must equal the env name in frontend/wrangler.jsonc."
   default     = "rafael-portfolio-frontend"
-}
-
-variable "backend_url" {
-  type        = string
-  description = "Public URL of the backend Cloud Run service to bind into the frontend proxy"
-  default     = "https://portfolio-backend-dev.a.run.app"
-}
-
-variable "proxy_identity_secret" {
-  type        = string
-  description = "Shared HMAC secret for trusted edge identity propagation (X-Client-Key-Proof)"
-  sensitive   = true
-  default     = "placeholder-proxy-identity-secret"
 }
 
 variable "enable_custom_domain" {
   type        = bool
-  description = "Whether to configure custom domain DNS records and worker routes"
+  description = "Whether to create the stage hostname DNS record and Worker route. Enable only after the Worker has been deployed once."
   default     = false
 }

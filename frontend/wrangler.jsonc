@@ -1,6 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "frontend",
+  // Base Worker name. Each deployment stage is a Wrangler environment with an explicit
+  // Worker name "<name>-<environment>". The Terraform route in deployment/cloudflare derives
+  // the same name; tools/check-deployment.mjs keeps the two aligned.
+  "name": "rafael-portfolio-frontend",
   "compatibility_date": "2026-09-24",
   "compatibility_flags": [
     "nodejs_compat"
@@ -10,5 +13,20 @@
     "directory": "dist/client",
     "not_found_handling": "none",
     "binding": "ASSETS"
+  },
+  // Only non-secret runtime values are written by the deploy command
+  // (--var PORTFOLIO_BACKEND_URL:...). ASSISTANT_PROXY_IDENTITY_SECRET is a Worker secret
+  // set out of band on the exact Worker named above; it is never listed here.
+  "env": {
+    "dev": {
+      "name": "rafael-portfolio-frontend-dev",
+      // dev has no custom route, so it is reached on workers.dev.
+      "workers_dev": true
+    },
+    "prod": {
+      "name": "rafael-portfolio-frontend-prod",
+      // prod is served only through the Terraform-owned zone route.
+      "workers_dev": false
+    }
   }
 }

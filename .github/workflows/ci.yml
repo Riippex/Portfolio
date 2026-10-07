@@ -9,6 +9,9 @@ on:
     branches:
       - develop
       - main
+  # The deploy workflow calls this workflow so that the exact commit being deployed passes
+  # the same validation, including the published-backend integration smoke.
+  workflow_call:
 
 permissions:
   contents: read
@@ -37,6 +40,9 @@ jobs:
 
       - name: Run architecture tests (Release)
         run: dotnet test backend/tests/Architecture/Rafael.Portfolio.ArchitectureTests/Rafael.Portfolio.ArchitectureTests.csproj -c Release --no-build
+
+      - name: Run published-backend integration smoke (Release)
+        run: dotnet test backend/tests/Integration/Rafael.Portfolio.IntegrationTests/Rafael.Portfolio.IntegrationTests.csproj -c Release --no-build
 
       - name: Check code formatting
         run: dotnet format backend/Rafael.Portfolio.sln --verify-no-changes --no-restore
@@ -75,17 +81,41 @@ jobs:
         working-directory: frontend
         run: npm run build:vinext
 
+      # Each stage is built with its own Wrangler environment and checked offline: the
+      # generated Worker name, target environment, and bindings must match what Terraform
+      # routes to and what the deploy workflow publishes. Nothing is uploaded.
+      - name: Verify per-stage Worker build and Wrangler dry run
+        working-directory: frontend
+        run: |
+          for stage in dev prod; do
+            CLOUDFLARE_ENV="${stage}" npm run build:vinext
+            node ../tools/check-wrangler-build.mjs "${stage}"
+            npx wrangler deploy --dry-run --env "${stage}" \
+              --outdir "${RUNNER_TEMP}/wrangler-${stage}" \
+              --var PORTFOLIO_BACKEND_URL:https://backend.example.test
+          done
+
   infrastructure:
-    name: Infrastructure (Terraform)
+    name: Infrastructure (Terraform and deployment invariants)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.15.8'
+
+      - name: Check deployment invariants
+        run: |
+          node --test tools/check-deployment.test.mjs
+          node tools/check-deployment.mjs
 
       - name: Validate GCP definitions
         run: |

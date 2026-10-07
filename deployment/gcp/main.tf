@@ -1,20 +1,31 @@
-# Google Cloud Service APIs required for the backend workload
-resource "google_project_service" "run" {
-  project            = var.project_id
-  service            = "run.googleapis.com"
-  disable_on_destroy = false
-}
+# ---------------------------------------------------------------------------
+# Ownership
+#
+# Terraform owns the durable shape of the backend: APIs, registry, identities, secret
+# containers, scaling, resource limits, the runtime configuration below, and IAM.
+# The deploy workflow owns the running release: the Cloud Run image and the deploy
+# metadata Cloud Run records when it updates a revision. Terraform ignores exactly those
+# attributes on the service (see lifecycle) and nothing else, so infrastructure
+# maintenance cannot reset a released image and a release cannot change security,
+# scaling, environment, or IAM settings.
+#
+# Secret payloads are never part of Terraform. Only the empty secret containers are
+# declared here; the owner adds the values out of band (see docs/runbooks/infrastructure.md).
+# ---------------------------------------------------------------------------
 
-resource "google_project_service" "artifactregistry" {
-  project            = var.project_id
-  service            = "artifactregistry.googleapis.com"
-  disable_on_destroy = false
-}
+locals {
+  # Remotely deployed backends always run with production-grade enforcement: the signed
+  # proxy identity is required and Turnstile fails closed. The deployment stage
+  # (var.environment) never selects this value; Development stays a local-only mode.
+  aspnetcore_environment = "Production"
 
-resource "google_project_service" "secretmanager" {
-  project            = var.project_id
-  service            = "secretmanager.googleapis.com"
-  disable_on_destroy = false
+  # Secrets the service reads at startup. The contact API token is intentionally absent:
+  # Contact is disabled, so it needs no credentials until a separate, owner-authorized
+  # activation adds them.
+  runtime_secrets = {
+    turnstile_secret_key  = "turnstile-secret-key"
+    proxy_identity_secret = "proxy-identity-secret"
+  }
 }
 
 # Artifact Registry Docker repository for container images
@@ -25,8 +36,12 @@ resource "google_artifact_registry_repository" "backend" {
   description   = "Docker container repository for Rafael.Portfolio backend"
   format        = "DOCKER"
 
+  labels = {
+    stage = var.environment
+  }
+
   depends_on = [
-    google_project_service.artifactregistry
+    google_project_service.required
   ]
 }
 
@@ -36,72 +51,47 @@ resource "google_service_account" "backend" {
   account_id   = var.backend_service_account_id
   display_name = "Portfolio Backend Cloud Run Runtime Account"
   description  = "Least-privilege runtime identity for Rafael.Portfolio.Web"
+
+  depends_on = [
+    google_project_service.required
+  ]
 }
 
-# Secret Manager definitions for sensitive backend credentials
-resource "google_secret_manager_secret" "turnstile_secret_key" {
+# Empty Secret Manager containers. The owner populates versions out of band.
+resource "google_secret_manager_secret" "runtime" {
+  for_each = local.runtime_secrets
+
   project   = var.project_id
-  secret_id = "turnstile-secret-key"
+  secret_id = each.value
+
+  labels = {
+    stage = var.environment
+  }
 
   replication {
     auto {}
   }
 
   depends_on = [
-    google_project_service.secretmanager
+    google_project_service.required
   ]
 }
 
-resource "google_secret_manager_secret" "proxy_identity_secret" {
+# Granular IAM: the runtime account can read only these specific secrets
+resource "google_secret_manager_secret_iam_member" "runtime_accessor" {
+  for_each = local.runtime_secrets
+
   project   = var.project_id
-  secret_id = "proxy-identity-secret"
-
-  replication {
-    auto {}
-  }
-
-  depends_on = [
-    google_project_service.secretmanager
-  ]
-}
-
-resource "google_secret_manager_secret" "contact_api_token" {
-  project   = var.project_id
-  secret_id = "contact-api-token"
-
-  replication {
-    auto {}
-  }
-
-  depends_on = [
-    google_project_service.secretmanager
-  ]
-}
-
-# Granular IAM bindings: Cloud Run runtime account only accesses these specific secrets
-resource "google_secret_manager_secret_iam_member" "turnstile_secret_accessor" {
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.turnstile_secret_key.secret_id
+  secret_id = google_secret_manager_secret.runtime[each.key].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.backend.email}"
 }
 
-resource "google_secret_manager_secret_iam_member" "proxy_secret_accessor" {
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.proxy_identity_secret.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.backend.email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "contact_token_accessor" {
-  project   = var.project_id
-  secret_id = google_secret_manager_secret.contact_api_token.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.backend.email}"
-}
-
-# Cloud Run v2 service for Rafael.Portfolio.Web modular monolith
+# Cloud Run v2 service for the Rafael.Portfolio.Web modular monolith.
+# Created only in the second bootstrap stage (create_service = true).
 resource "google_cloud_run_v2_service" "backend" {
+  count = var.create_service ? 1 : 0
+
   name     = var.service_name
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL"
@@ -130,7 +120,7 @@ resource "google_cloud_run_v2_service" "backend" {
 
       env {
         name  = "ASPNETCORE_ENVIRONMENT"
-        value = var.environment == "prod" ? "Production" : "Development"
+        value = local.aspnetcore_environment
       }
 
       env {
@@ -147,7 +137,7 @@ resource "google_cloud_run_v2_service" "backend" {
         name = "Turnstile__SecretKey"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.turnstile_secret_key.secret_id
+            secret  = google_secret_manager_secret.runtime["turnstile_secret_key"].secret_id
             version = "latest"
           }
         }
@@ -157,17 +147,7 @@ resource "google_cloud_run_v2_service" "backend" {
         name = "AssistantSecurity__ProxyIdentitySecret"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.proxy_identity_secret.secret_id
-            version = "latest"
-          }
-        }
-      }
-
-      env {
-        name = "Contact__ApiToken"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.contact_api_token.secret_id
+            secret  = google_secret_manager_secret.runtime["proxy_identity_secret"].secret_id
             version = "latest"
           }
         }
@@ -175,20 +155,34 @@ resource "google_cloud_run_v2_service" "backend" {
     }
   }
 
+  lifecycle {
+    # The deploy workflow owns exactly these. Everything else on the service stays managed.
+    ignore_changes = [
+      client,
+      client_version,
+      labels,
+      template[0].labels,
+      template[0].containers[0].image,
+    ]
+
+    precondition {
+      condition     = var.container_image != ""
+      error_message = "create_service requires container_image: push an image to Artifact Registry first and pass its immutable reference."
+    }
+  }
+
   depends_on = [
-    google_project_service.run,
-    google_secret_manager_secret_iam_member.turnstile_secret_accessor,
-    google_secret_manager_secret_iam_member.proxy_secret_accessor,
-    google_secret_manager_secret_iam_member.contact_token_accessor
+    google_secret_manager_secret_iam_member.runtime_accessor
   ]
 }
 
-# Public invocation IAM member (when routed from Cloudflare edge proxy)
+# Public invocation. Callers still need the signed proxy identity and Turnstile.
 resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
-  count    = var.allow_unauthenticated ? 1 : 0
+  count = var.create_service && var.allow_unauthenticated ? 1 : 0
+
   project  = var.project_id
   location = var.region
-  name     = google_cloud_run_v2_service.backend.name
+  name     = google_cloud_run_v2_service.backend[0].name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
