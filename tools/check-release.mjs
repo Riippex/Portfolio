@@ -393,7 +393,7 @@ function checkRunbook(runbook, managedSecrets, fail) {
     fail("cost-claims", "an unsupported monthly ceiling is stated");
   }
   if (!/No spending limit is enforced/.test(cost)) fail("cost-claims", "state that no spending limit is enforced");
-  for (const needle of [/assumption/i, /Worker CPU|CPU time/i, /egress/i, /logging/i, /Artifact Registry/i, /Secret Manager/i]) {
+  for (const needle of [/assumption/i, /Worker CPU|CPU time/i, /egress/i, /logging/i, /Artifact Registry/i, /Secret Manager/i, /Email Service/i, /rejected requests still/i]) {
     if (!needle.test(cost)) fail("cost-claims", `cost section must cover ${needle.source}`);
   }
   for (const secret of managedSecrets) {
@@ -401,6 +401,12 @@ function checkRunbook(runbook, managedSecrets, fail) {
   }
   if (/contact-token|contact-api-token|three secrets|3 secrets/i.test(runbook)) {
     fail("cost-claims", "the runbook documents a contact secret or a wrong secret count");
+  }
+
+  // The pre-flight list must gate Contact activation, not only describe it elsewhere.
+  const preflight = runbook.split("## Pre-flight Checklist")[1]?.split(/\n## /)[0] ?? "";
+  if (!/Contact/.test(preflight) || !/disabled/i.test(preflight) || !preflight.includes("contact.md")) {
+    fail("privacy-claims", "the pre-flight checklist must keep Contact disabled unless the activation prerequisites are complete");
   }
 
   // Privacy claims: scoped to the application.

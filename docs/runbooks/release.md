@@ -21,6 +21,7 @@ Before initiating a release to production:
   - `node tools/check-terraform-plans.mjs` (needs both `terraform init -backend=false` runs)
   - `node --test tools/check-release.test.mjs` and `node tools/check-release.mjs`
 - [ ] Agent skills are synchronized: `pwsh tools/sync-agent-skills.ps1 -Check` passes.
+- [ ] Contact stays **disabled** in this release unless the owner has completed the activation prerequisites in the [Contact runbook](contact.md): provider and mailbox retention reviewed, mailbox cleanup defined and verified, sender, destination and credential set up, and one authorized live smoke send observed. Offline readiness is not activation.
 - [ ] No private files (`documents/`, `.env`, machine configs) or raw credentials are staged or committed.
 - [ ] The owner has read [What the Offline Checks Establish](#what-the-offline-checks-establish) and accepts the live items it lists as unverified.
 
@@ -86,7 +87,8 @@ Provenance: the Cloudflare page was fetched directly (it states it was last upda
 - Backend requests per month: **light** 10,000 with 500 cold starts; **moderate** 100,000 with 2,000; **stress** 3,000,000 with 20,000.
 - Registry: each release adds about 60 MiB of new layers, 30 releases retained, no cleanup policy.
 - Secrets: the two managed secrets with one active version each, read twice per instance start.
-- Not included: domain registration, Cloudflare Email Service (Contact is disabled), taxes, and other usage on the same billing account that shares the free tiers.
+- Not included: domain registration, taxes, and other usage on the same billing account that shares the free tiers.
+- **Contact (optional, disabled):** Cloudflare Email Service costs are not estimated here. The service is documented as beta, and its pricing and the account's entitlement must be confirmed at https://developers.cloudflare.com/email-service/platform/pricing/ before activation. The Contact runbook lists the prerequisites.
 
 ### Estimated monthly cost (USD)
 
@@ -112,7 +114,7 @@ Provenance: the Cloudflare page was fetched directly (it states it was last upda
 ### Spend controls
 
 - **No spending limit is enforced.** `max_instances = 2` bounds the number of instances, not dollars: request volume, egress, and Worker usage are not capped by it.
-- What exists: scale to zero (`min_instances = 0`), the instance cap, and the CPU and memory limits, all wired from Terraform variables (checked offline by `check-release.mjs`); Turnstile, the signed edge identity, and application rate limits reduce abusive traffic.
+- What exists: scale to zero (`min_instances = 0`), the instance cap, and the CPU and memory limits, all wired from Terraform variables (checked offline by `check-release.mjs`); Turnstile, the signed edge identity, and application rate limits reduce abusive traffic, but **rejected requests still execute application code and are billed**, so they do not cap spend.
 - What does not exist in this repository: a Cloud Billing budget or budget alert, a quota override, or a Cloudflare spend cap. A budget alert notifies; it does not by itself stop spend. Creating budget alerts is a billing change and is left to the owner before launch.
 
 ## What the Offline Checks Establish
