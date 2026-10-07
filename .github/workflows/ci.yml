@@ -119,6 +119,14 @@ jobs:
           node --test tools/check-deployment.test.mjs
           node tools/check-deployment.mjs
 
+      # Declared-file wiring, evidence against the canonical schema, Terraform scaling wiring,
+      # the tracked-file address scan, and the release runbook's cost and privacy claims.
+      # deploy.yml calls this workflow at the deployed commit, so this gates deployment too.
+      - name: Check release invariants
+        run: |
+          node --test tools/check-release.test.mjs
+          node tools/check-release.mjs
+
       - name: Validate GCP definitions
         run: |
           terraform -chdir=deployment/gcp fmt -check
