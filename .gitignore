@@ -20,6 +20,15 @@ obj/
 .wrangler/
 .dev.vars
 
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+
+
 # env
 .env
 .env*.local

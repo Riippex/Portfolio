@@ -1,0 +1,13 @@
+# Cloudflare configuration example
+# Copy this file to terraform.tfvars and fill in real values.
+# NEVER commit terraform.tfvars containing real credentials.
+
+cloudflare_api_token  = "placeholder-api-token"
+account_id            = "placeholder-account-id"
+zone_id               = "placeholder-zone-id"
+domain_name           = "rafaelpatinodiaz.com"
+environment           = "dev"
+worker_name           = "rafael-portfolio-frontend"
+backend_url           = "https://rafael-portfolio-backend-dev.a.run.app"
+proxy_identity_secret = "placeholder-shared-hmac-secret"
+enable_custom_domain  = false

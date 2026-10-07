@@ -1,0 +1,17 @@
+# Google Cloud configuration example
+# Copy this file to terraform.tfvars and fill in real values.
+# NEVER commit terraform.tfvars containing real credentials.
+
+project_id                  = "my-gcp-project-id"
+region                      = "us-central1"
+environment                 = "dev"
+service_name                = "rafael-portfolio-backend"
+backend_service_account_id  = "sa-portfolio-backend"
+artifact_repository_id      = "portfolio"
+container_image             = "us-central1-docker.pkg.dev/my-gcp-project-id/portfolio/backend:latest"
+backend_port                = 8080
+min_instances               = 0
+max_instances               = 2
+cpu_limit                   = "1000m"
+memory_limit                = "512Mi"
+allow_unauthenticated       = true
