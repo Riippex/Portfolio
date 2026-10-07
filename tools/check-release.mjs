@@ -128,11 +128,25 @@ function isReservedDomain(domain) {
   return ["test", "invalid", "example", "localhost"].includes(lower.split(".").pop());
 }
 
+// Email-like tokens. The same pattern drives detection and redaction, so what the scan can find
+// is exactly what the diagnostics cannot repeat.
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})/g;
+
+/**
+ * Centralized redaction: every violation returned by checkRelease, and every line the CLI prints,
+ * passes through this. It masks any email-like token (reserved domains too, which keeps the rule
+ * simple), so no diagnostic can repeat an address whatever field or file it came from. Diagnostics
+ * also avoid interpolating inventory values in the first place and locate problems by index; this
+ * is the backstop for anything else, such as a file name or an error message.
+ */
+export function redact(text) {
+  return String(text).replace(EMAIL_PATTERN, "<address withheld>");
+}
+
 // Lines containing an email-like token on a non-reserved domain. Values are never returned.
 function privateAddressLines(content) {
   const lines = [];
-  const pattern = /[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})/g;
-  for (const match of content.matchAll(pattern)) {
+  for (const match of content.matchAll(EMAIL_PATTERN)) {
     if (!isReservedDomain(match[1])) {
       lines.push(content.slice(0, match.index).split("\n").length);
     }
@@ -212,7 +226,7 @@ function validateAgainstSchema(schema, value, at, out) {
 
 export function checkRelease(files) {
   const violations = [];
-  const fail = (id, detail) => violations.push(`${id}:${detail}`);
+  const fail = (id, detail) => violations.push(redact(`${id}:${detail}`));
 
   // 0. Every declared file must exist and have content (fail closed) ----------------------
   for (const rel of CHECKED_FILES) {
@@ -341,36 +355,41 @@ function checkEvidence(files, fail) {
     return;
   }
 
-  // Governance (docs/evidence/README.md): deny by default.
-  const ids = new Set();
-  const slugs = new Set();
-  const claimIds = new Set();
-  for (const item of inventory.items) {
-    if (item === null || typeof item !== "object") continue;
-    const label = `item ${item.slug ?? item.id ?? "?"}`;
-    if (ids.has(item.id)) fail("evidence", `${label}: duplicate id`);
-    if (slugs.has(item.slug)) fail("evidence", `${label}: duplicate slug`);
-    ids.add(item.id);
-    slugs.add(item.slug);
+  // Governance (docs/evidence/README.md): deny by default. Problems are located by index
+  // (items[2].claims[0]) rather than by slug, id, or claimId, because those values come from
+  // the inventory and a malformed or hostile one could put anything in them.
+  const firstId = new Map();
+  const firstSlug = new Map();
+  const firstClaim = new Map();
+  inventory.items.forEach((item, index) => {
+    if (item === null || typeof item !== "object") return;
+    const at = `items[${index}]`;
+
+    if (firstId.has(item.id)) fail("evidence", `${at}: duplicate id (first at items[${firstId.get(item.id)}])`);
+    else firstId.set(item.id, index);
+    if (firstSlug.has(item.slug)) fail("evidence", `${at}: duplicate slug (first at items[${firstSlug.get(item.slug)}])`);
+    else firstSlug.set(item.slug, index);
 
     if (item.evidenceStatus === "verified" && !(typeof item.sourceUrl === "string" && item.sourceUrl.startsWith("https://"))) {
-      fail("evidence", `${label}: verified evidence needs a public https sourceUrl`);
+      fail("evidence", `${at}: verified evidence needs a public https sourceUrl`);
     }
     if (typeof item.documentPath === "string" && typeof files[item.documentPath] !== "string") {
-      fail("evidence", `${label}: documentPath is not a tracked file`);
+      fail("evidence", `${at}: documentPath is not a tracked file`);
     }
-    for (const claim of Array.isArray(item.claims) ? item.claims : []) {
-      if (claim === null || typeof claim !== "object") continue;
-      if (claimIds.has(claim.claimId)) fail("evidence", `${label}: duplicate claimId ${claim.claimId}`);
-      claimIds.add(claim.claimId);
+
+    (Array.isArray(item.claims) ? item.claims : []).forEach((claim, claimIndex) => {
+      if (claim === null || typeof claim !== "object") return;
+      const claimAt = `${at}.claims[${claimIndex}]`;
+      if (firstClaim.has(claim.claimId)) fail("evidence", `${claimAt}: duplicate claimId (first at ${firstClaim.get(claim.claimId)})`);
+      else firstClaim.set(claim.claimId, claimAt);
       if (claim.status === "verified" && item.evidenceStatus !== "verified") {
-        fail("evidence", `${label}: claim ${claim.claimId} is verified but its item is not`);
+        fail("evidence", `${claimAt}: claim is verified but its item is not`);
       }
       if (typeof claim.citation === "string" && !claim.citation.includes("#")) {
-        fail("evidence", `${label}: claim ${claim.claimId} citation has no anchor`);
+        fail("evidence", `${claimAt}: citation has no anchor`);
       }
-    }
-  }
+    });
+  });
 }
 
 function checkRunbook(runbook, managedSecrets, fail) {
@@ -457,12 +476,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     scanned = Object.keys(files).length;
     violations = checkRelease(files);
   } catch (error) {
-    console.error(`Release check could not run: ${error.message}`);
+    console.error(redact(`Release check could not run: ${error.message}`));
     process.exit(1);
   }
   if (violations.length > 0) {
     console.error(`Release check violations (${violations.length}):`);
-    for (const violation of violations) console.error(`  - ${violation}`);
+    for (const violation of violations) console.error(redact(`  - ${violation}`));
     process.exit(1);
   }
   console.log(`Release checks passed (${CHECKED_FILES.length} declared files, ${scanned} tracked files scanned for addresses).`);

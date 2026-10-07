@@ -8,11 +8,13 @@
 // at run time on a domain that is not reserved, which is what the address scan must catch.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { CHECKED_FILES, REQUIRED_SECTIONS, checkRelease, loadRepositoryFiles } from "./check-release.mjs";
+import { CHECKED_FILES, REQUIRED_SECTIONS, checkRelease, loadRepositoryFiles, redact } from "./check-release.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const real = loadRepositoryFiles(root);
@@ -53,6 +55,16 @@ const editJson = (change) => (text) => {
 };
 
 const violationsOf = (files) => checkRelease(files);
+
+// The whole set of diagnostics (or printed text) must withhold the full address, its local part,
+// and its domain. Never filter the set first: the leak this guards against is in the diagnostics
+// that are NOT about the address.
+function assertWithheld(diagnostics, label = "diagnostics") {
+  const text = (Array.isArray(diagnostics) ? diagnostics.join("\n") : String(diagnostics)).toLowerCase();
+  for (const [what, value] of [["full address", PROBE], ["local part", PROBE_LOCAL], ["domain", PROBE_DOMAIN]]) {
+    assert.ok(!text.includes(value.toLowerCase()), `${label} repeated the ${what}`);
+  }
+}
 const hasPrefix = (violations, prefix) => violations.some((violation) => violation.startsWith(prefix));
 
 test("the real repository satisfies every release invariant", () => {
@@ -105,12 +117,11 @@ for (const [name, path] of [
 }
 
 test("diagnostics withhold the matched value, its local part, and its domain", () => {
-  const violations = violationsOf(mutate(RUNBOOK, append(`Contact: ${PROBE}`))).filter((v) => v.startsWith("private-address:"));
-  assert.equal(violations.length, 1);
-  assert.match(violations[0], /line \d+/);
-  for (const secret of [PROBE, PROBE_LOCAL, PROBE_DOMAIN]) {
-    assert.ok(!violations[0].includes(secret), "the diagnostic repeated a matched value");
-  }
+  const all = violationsOf(mutate(RUNBOOK, append(`Contact: ${PROBE}`)));
+  const flagged = all.filter((v) => v.startsWith("private-address:"));
+  assert.equal(flagged.length, 1);
+  assert.match(flagged[0], /line \d+/);
+  assertWithheld(all);
 });
 
 test("placeholder addresses on reserved domains are allowed", () => {
@@ -294,6 +305,142 @@ for (const [name, edit, prefix] of [
     assert.ok(hasPrefix(violations, prefix), JSON.stringify(violations));
   });
 }
+
+// ---------------------------------------------------------------------------------------
+// Redaction covers every diagnostic, whichever field or file the address came from
+// ---------------------------------------------------------------------------------------
+
+test("redact masks any email-like token, reserved domains included, and leaves other text alone", () => {
+  assert.equal(redact(`see ${PROBE} and a@example.com`), "see <address withheld> and <address withheld>");
+  assert.equal(redact("items[1].claims[0]: citation has no anchor"), "items[1].claims[0]: citation has no anchor");
+  assert.equal(redact("actions/checkout@v4 esbuild@0.21.5"), "actions/checkout@v4 esbuild@0.21.5");
+  assert.equal(redact(redact(PROBE)), redact(PROBE), "redaction is idempotent");
+});
+
+test("a claimId holding an address and a missing citation anchor: detected, located, and withheld", () => {
+  const files = mutate(INVENTORY, editJson((v) => {
+    const claim = projectItem(v).claims[0];
+    claim.claimId = PROBE;
+    claim.citation = "docs/evidence/projects/x.md";
+  }));
+  const violations = violationsOf(files);
+  assert.ok(hasPrefix(violations, `private-address:${INVENTORY}`), "the address must still be detected");
+  assert.ok(violations.some((v) => /^evidence:items\[\d+\]\.claims\[0\]: citation has no anchor$/.test(v)), JSON.stringify(violations));
+  assertWithheld(violations);
+});
+
+test("two slugs holding the same address: detected, located, and withheld", () => {
+  const files = mutate(INVENTORY, editJson((v) => { v.items[0].slug = PROBE; v.items[1].slug = PROBE; }));
+  const violations = violationsOf(files);
+  assert.ok(hasPrefix(violations, `private-address:${INVENTORY}`));
+  assert.ok(violations.some((v) => /^evidence:items\[1\]: duplicate slug \(first at items\[0\]\)$/.test(v)), JSON.stringify(violations));
+  assertWithheld(violations);
+});
+
+test("two items and two claims sharing an address as id and claimId are located by index", () => {
+  const files = mutate(INVENTORY, editJson((v) => {
+    v.items[0].id = PROBE;
+    v.items[1].id = PROBE;
+    v.items[0].claims[0].claimId = PROBE;
+    v.items[1].claims[0].claimId = PROBE;
+  }));
+  const violations = violationsOf(files);
+  assert.ok(violations.some((v) => /^evidence:items\[1\]: duplicate id \(first at items\[0\]\)$/.test(v)));
+  assert.ok(violations.some((v) => /^evidence:items\[1\]\.claims\[0\]: duplicate claimId \(first at items\[0\]\.claims\[0\]\)$/.test(v)));
+  assertWithheld(violations);
+});
+
+// Plant the address in each inventory field, one at a time; no diagnostic may repeat it.
+for (const [field, plant] of [
+  ["kind", (v) => { v.items[0].kind = PROBE; }],
+  ["evidenceStatus", (v) => { v.items[0].evidenceStatus = PROBE; }],
+  ["title", (v) => { v.items[0].title = PROBE; }],
+  ["summary", (v) => { v.items[0].summary = PROBE; }],
+  ["version", (v) => { v.version = PROBE; }],
+  ["lastUpdated", (v) => { v.lastUpdated = PROBE; }],
+  ["lastReviewed", (v) => { v.items[0].lastReviewed = PROBE; }],
+  ["sourceUrl", (v) => { const item = projectItem(v); item.evidenceStatus = "verified"; item.sourceUrl = PROBE; }],
+  ["documentPath", (v) => { projectItem(v).documentPath = PROBE; }],
+  ["claim statement", (v) => { v.items[0].claims[0].statement = PROBE; }],
+  ["claim status", (v) => { v.items[0].claims[0].status = PROBE; }],
+  ["claim citation", (v) => { v.items[0].claims[0].citation = PROBE; }],
+  ["focus area", (v) => { v.items.find((i) => i.kind === "profile").focusAreas = [PROBE, 7]; }],
+  ["an unexpected key name", (v) => { v.items[0][PROBE] = true; }],
+]) {
+  test(`an address planted in the inventory ${field} is detected and never repeated`, () => {
+    const violations = violationsOf(mutate(INVENTORY, editJson(plant)));
+    assert.ok(hasPrefix(violations, `private-address:${INVENTORY}`), "the address must be detected");
+    assertWithheld(violations, `diagnostics for ${field}`);
+  });
+}
+
+test("an address in a file name is detected and never repeated", () => {
+  const violations = violationsOf({ ...real, [`notes/${PROBE}.md`]: `reach ${PROBE}` });
+  assert.ok(violations.some((v) => v.startsWith("private-address:notes/")));
+  assertWithheld(violations);
+});
+
+test("an address in the schema, a declared source file, and a declared workflow is never repeated", () => {
+  for (const path of [SCHEMA, WEB_PROGRAM, DEPLOY]) {
+    const violations = violationsOf(mutate(path, (text) => (path === SCHEMA ? text.replace('"title"', `"x-contact": "${PROBE}", "title"`) : `${text}\n// ${PROBE}\n`)));
+    assert.ok(hasPrefix(violations, `private-address:${path}`), path);
+    assertWithheld(violations, path);
+  }
+});
+
+// What the CLI actually prints, from a temporary git tree: the hostile inventory plus every
+// planted placement. The tree is deleted afterwards; nothing here touches the real repository.
+function withTemporaryRepository(files, run) {
+  const base = mkdtempSync(join(tmpdir(), "release-cli-"));
+  try {
+    for (const [rel, content] of Object.entries(files)) {
+      const full = join(base, rel);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, content);
+    }
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: base }).status, 0);
+    assert.equal(spawnSync("git", ["add", "-A"], { cwd: base }).status, 0);
+    return run(base);
+  } finally {
+    rmSync(base, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+test("the CLI prints no part of an address planted across the inventory", () => {
+  const hostile = mutate(INVENTORY, editJson((v) => {
+    v.items[0].slug = PROBE;
+    v.items[1].slug = PROBE;
+    v.items[0].id = PROBE;
+    v.items[1].id = PROBE;
+    const claim = v.items[1].claims[0];
+    claim.claimId = PROBE;
+    claim.citation = "docs/evidence/projects/x.md";
+  }));
+  const result = withTemporaryRepository(hostile, (base) =>
+    spawnSync(process.execPath, [join(base, "tools", "check-release.mjs")], { encoding: "utf8" }));
+
+  assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+  const printed = `${result.stdout}\n${result.stderr}`;
+  assert.match(printed, /private-address:/);
+  assert.match(printed, /evidence:items\[1\]/);
+  assertWithheld(printed, "CLI output");
+});
+
+test("the CLI error path redacts an address that appears in a path or message", () => {
+  // No git repository here, so loading fails; the base directory name itself holds the address.
+  const base = join(mkdtempSync(join(tmpdir(), "release-cli-err-")), PROBE);
+  mkdirSync(join(base, "tools"), { recursive: true });
+  try {
+    writeFileSync(join(base, "tools", "check-release.mjs"), readFileSync(join(root, "tools", "check-release.mjs")));
+    const result = spawnSync(process.execPath, [join(base, "tools", "check-release.mjs")], { encoding: "utf8" });
+    const printed = `${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 1, printed);
+    assert.match(printed, /could not run/);
+    assertWithheld(printed, "CLI error output");
+  } finally {
+    rmSync(dirname(base), { recursive: true, force: true, maxRetries: 3 });
+  }
+});
 
 test("every mutation case has a distinct name", () => {
   // Guards the table-driven tests above from silently shadowing each other.
