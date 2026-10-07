@@ -21,3 +21,13 @@ output "secret_manager_secret_ids" {
     contact_api_token     = google_secret_manager_secret.contact_api_token.secret_id
   }
 }
+
+output "workload_identity_provider" {
+  description = "Workload Identity Provider resource name for GitHub Actions auth (projects/{project_number}/locations/global/workloadIdentityPools/{pool}/providers/{provider})"
+  value       = google_iam_workload_identity_pool_provider.github_provider.name
+}
+
+output "ci_service_account_email" {
+  description = "Dedicated CI deployer service account email to impersonate in GitHub Actions"
+  value       = google_service_account.ci_deployer.email
+}

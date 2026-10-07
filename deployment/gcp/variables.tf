@@ -75,3 +75,27 @@ variable "allow_unauthenticated" {
   description = "Whether to allow unauthenticated invocations (ingress routed via Cloudflare proxy)"
   default     = true
 }
+
+variable "github_repository" {
+  type        = string
+  description = "GitHub repository in owner/repo format for OIDC trust condition"
+  default     = "Riippex/Portfolio"
+}
+
+variable "workload_identity_pool_id" {
+  type        = string
+  description = "Workload Identity Pool ID for GitHub Actions federation"
+  default     = "github-actions-pool"
+}
+
+variable "workload_identity_pool_provider_id" {
+  type        = string
+  description = "Workload Identity Pool Provider ID for GitHub Actions OIDC"
+  default     = "github-provider"
+}
+
+variable "ci_service_account_id" {
+  type        = string
+  description = "Service account ID for the dedicated CI/CD deployer"
+  default     = "sa-portfolio-ci"
+}

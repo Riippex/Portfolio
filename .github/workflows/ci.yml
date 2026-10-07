@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+    branches:
+      - develop
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (.NET 10)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore backend/Rafael.Portfolio.sln
+
+      - name: Build solution (Release)
+        run: dotnet build backend/Rafael.Portfolio.sln -c Release --no-restore
+
+      - name: Run unit tests (Release)
+        run: dotnet test backend/tests/Unit/Rafael.Portfolio.UnitTests/Rafael.Portfolio.UnitTests.csproj -c Release --no-build
+
+      - name: Run architecture tests (Release)
+        run: dotnet test backend/tests/Architecture/Rafael.Portfolio.ArchitectureTests/Rafael.Portfolio.ArchitectureTests.csproj -c Release --no-build
+
+      - name: Check code formatting
+        run: dotnet format backend/Rafael.Portfolio.sln --verify-no-changes --no-restore
+
+  frontend:
+    name: Frontend (Next.js & Vinext)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run linter
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run unit tests
+        working-directory: frontend
+        run: npm test -- --run
+
+      - name: Build Next.js production bundle
+        working-directory: frontend
+        run: npm run build
+
+      - name: Build Vinext Cloudflare Workers bundle
+        working-directory: frontend
+        run: npm run build:vinext
+
+  infrastructure:
+    name: Infrastructure (Terraform)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.15.8'
+
+      - name: Validate GCP definitions
+        run: |
+          terraform -chdir=deployment/gcp fmt -check
+          terraform -chdir=deployment/gcp init -backend=false
+          terraform -chdir=deployment/gcp validate
+
+      - name: Validate Cloudflare definitions
+        run: |
+          terraform -chdir=deployment/cloudflare fmt -check
+          terraform -chdir=deployment/cloudflare init -backend=false
+          terraform -chdir=deployment/cloudflare validate
+
+  skills:
+    name: Agent Skills Sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify skill synchronization
+        shell: pwsh
+        run: ./tools/sync-agent-skills.ps1 -Check

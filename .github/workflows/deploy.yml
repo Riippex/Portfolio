@@ -1,0 +1,111 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+      deploy_backend:
+        description: 'Deploy backend to Google Cloud Run'
+        required: true
+        default: true
+        type: boolean
+      deploy_frontend:
+        description: 'Deploy frontend to Cloudflare Workers'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend (GCP Cloud Run)
+    if: inputs.deploy_backend
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud via OIDC
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          REGION="${{ vars.GCP_REGION || 'us-central1' }}"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and Push Backend Container Image
+        run: |
+          REGION="${{ vars.GCP_REGION || 'us-central1' }}"
+          PROJECT_ID="${{ vars.GCP_PROJECT_ID }}"
+          REPO="${{ vars.GCP_ARTIFACT_REPO || 'portfolio' }}"
+          IMAGE_BASE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/backend"
+          IMAGE_TAG="${IMAGE_BASE}:${{ github.sha }}"
+          IMAGE_LATEST="${IMAGE_BASE}:latest"
+
+          docker build -f backend/Dockerfile -t "${IMAGE_TAG}" -t "${IMAGE_LATEST}" .
+          docker push "${IMAGE_TAG}"
+          docker push "${IMAGE_LATEST}"
+
+          echo "DEPLOYED_IMAGE=${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ vars.GCP_CLOUDRUN_SERVICE || 'rafael-portfolio-backend' }}
+          region: ${{ vars.GCP_REGION || 'us-central1' }}
+          image: ${{ env.DEPLOYED_IMAGE }}
+
+  deploy-frontend:
+    name: Deploy Frontend (Cloudflare Workers)
+    if: inputs.deploy_frontend
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build Vinext bundle for Cloudflare Workers
+        working-directory: frontend
+        run: npm run build:vinext
+        env:
+          PORTFOLIO_BACKEND_URL: ${{ vars.PORTFOLIO_BACKEND_URL }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+
+      - name: Deploy to Cloudflare Workers via Wrangler
+        working-directory: frontend
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

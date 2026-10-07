@@ -15,3 +15,7 @@ max_instances               = 2
 cpu_limit                   = "1000m"
 memory_limit                = "512Mi"
 allow_unauthenticated       = true
+github_repository           = "Riippex/Portfolio"
+workload_identity_pool_id   = "github-actions-pool"
+workload_identity_pool_provider_id = "github-provider"
+ci_service_account_id       = "sa-portfolio-ci"

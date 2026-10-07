@@ -40,6 +40,47 @@ To prevent denial-of-wallet risks and unexpected cloud bills:
 | Artifact Registry | Docker format | Immutable digest references; cleanup policy can prune untagged layers |
 | Data Persistence | None | Zero-storage architecture: no Cloud SQL, no Firestore database provisioned |
 
+## CI/CD and Workload Identity Federation (OIDC)
+
+Continuous deployment uses keyless OpenID Connect (OIDC) authentication between GitHub Actions and Google Cloud Platform. Long-lived service account key files (`.json`) are forbidden.
+
+### OIDC Trust Configuration
+
+1. **Workload Identity Pool**: `projects/{PROJECT_NUMBER}/locations/global/workloadIdentityPools/github-actions-pool`
+2. **Provider**: `github-provider` with issuer `https://token.actions.githubusercontent.com`.
+3. **Attribute Mapping**:
+   - `google.subject` -> `assertion.sub`
+   - `attribute.repository` -> `assertion.repository`
+   - `attribute.ref` -> `assertion.ref`
+4. **Trust Boundary Condition**:
+   `assertion.repository == 'Riippex/Portfolio' && (assertion.ref == 'refs/heads/develop' || assertion.ref == 'refs/heads/main')`
+   This prevents untrusted forks, pull requests, or unauthorized branches from impersonating the deployment identity.
+
+### IAM Role Matrix
+
+| Identity | Scope / Role | Purpose |
+|---|---|---|
+| `sa-portfolio-ci` | `roles/iam.workloadIdentityUser` | PrincipalSet bound to `Riippex/Portfolio` |
+| `sa-portfolio-ci` | `roles/artifactregistry.writer` | Scoped strictly to `portfolio` repository for Docker push |
+| `sa-portfolio-ci` | `roles/run.developer` | Scoped strictly to `rafael-portfolio-backend` Cloud Run service |
+| `sa-portfolio-ci` | `roles/iam.serviceAccountUser` | Scoped strictly to `sa-portfolio-backend` runtime service account |
+| `sa-portfolio-backend` | `roles/secretmanager.secretAccessor` | Runtime access to `turnstile-secret-key`, `proxy-identity-secret`, `contact-api-token` |
+
+### GitHub Actions Secrets & Variables
+
+- **Variables (`vars.*`)**:
+  - `GCP_PROJECT_ID`: GCP project identifier.
+  - `GCP_REGION`: Target region (default: `us-central1`).
+  - `GCP_WORKLOAD_IDENTITY_PROVIDER`: Full provider URI from Terraform output.
+  - `GCP_CI_SERVICE_ACCOUNT`: Email of `sa-portfolio-ci`.
+  - `GCP_ARTIFACT_REPO`: Name of repository (`portfolio`).
+  - `GCP_CLOUDRUN_SERVICE`: Cloud Run service name (`rafael-portfolio-backend`).
+  - `CLOUDFLARE_ACCOUNT_ID`: Cloudflare account ID.
+  - `PORTFOLIO_BACKEND_URL`: Public URL of Cloud Run backend for frontend binding.
+  - `NEXT_PUBLIC_TURNSTILE_SITE_KEY`: Public Turnstile site key.
+- **Secrets (`secrets.*`)**:
+  - `CLOUDFLARE_API_TOKEN`: Cloudflare token with scoped Workers and DNS permissions.
+
 ## Verification Workflow
 
 All infrastructure code must be validated locally before pull request or review handoff:
@@ -66,3 +107,4 @@ Live application of infrastructure requires owner authorization:
 - [ ] Secret values populated in Secret Manager (`turnstile-secret-key`, `proxy-identity-secret`).
 - [ ] Cloudflare API token generated with Zone, DNS, Workers, and Turnstile permissions.
 - [ ] Custom domain DNS verified and Turnstile widget activated.
+- [ ] GitHub repository variables (`vars.*`) and secrets (`secrets.*`) configured in repository settings.
