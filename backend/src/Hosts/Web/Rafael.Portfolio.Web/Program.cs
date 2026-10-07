@@ -1,5 +1,7 @@
 using Rafael.Portfolio.Modules.Assistant.Application;
 using Rafael.Portfolio.Modules.Assistant.Infrastructure;
+using Rafael.Portfolio.Modules.Contact.Application;
+using Rafael.Portfolio.Modules.Contact.Infrastructure;
 using Rafael.Portfolio.Modules.JobMatching.Application;
 using Rafael.Portfolio.Modules.JobMatching.Infrastructure;
 using Rafael.Portfolio.Modules.Knowledge.Application;
@@ -54,6 +56,20 @@ builder.Services.AddSingleton<IAssistantService, AssistantService>();
 builder.Services.AddSingleton<IJobMatchingEvidenceAdapter, KnowledgeJobMatchingEvidenceAdapter>();
 builder.Services.AddSingleton<IJobDescriptionAnalyzer, DeterministicJobDescriptionAnalyzer>();
 builder.Services.AddSingleton<IJobMatchingService, JobMatchingService>();
+
+var contactOptions = builder.Configuration.GetSection(ContactOptions.SectionName).Get<ContactOptions>() ?? new ContactOptions();
+contactOptions.Validate();
+builder.Services.AddSingleton(contactOptions);
+
+builder.Services.AddHttpClient("cloudflare-email");
+builder.Logging.AddFilter("System.Net.Http.HttpClient.cloudflare-email", LogLevel.Warning);
+builder.Services.AddSingleton<IContactRelay>(sp =>
+    new CloudflareEmailRelay(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("cloudflare-email"),
+        sp.GetRequiredService<ContactOptions>()));
+builder.Services.AddSingleton<IContactRateLimiter>(_ => new InMemoryContactRateLimiter(3, TimeSpan.FromMinutes(10)));
+builder.Services.AddSingleton<IContactService, ContactService>();
+
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();
@@ -70,6 +86,7 @@ v1.MapPortfolioEndpoints();
 v1.MapKnowledgeEndpoints();
 v1.MapAssistantEndpoints();
 v1.MapJobMatchingEndpoints();
+v1.MapContactEndpoints();
 
 app.Run();
 

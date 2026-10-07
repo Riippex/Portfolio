@@ -362,6 +362,53 @@ public sealed class PublishedBackendSmokeTests
                 Assert.Equal(HttpStatusCode.BadRequest, jobOversizedResponse.StatusCode);
             }
 
+            run.Stage = "development contact requests";
+            const string contactVisitorKey = "visitor-contact-integration";
+            HttpRequestMessage ContactRequest(object payload, string? clientKey = null, string? proof = null)
+            {
+                var req = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/contact", UriKind.Relative));
+                if (clientKey is not null)
+                {
+                    req.Headers.TryAddWithoutValidation("X-Client-Key", clientKey);
+                }
+                if (proof is not null)
+                {
+                    req.Headers.TryAddWithoutValidation("X-Client-Key-Proof", proof);
+                }
+                req.Content = new StringContent(
+                    JsonSerializer.Serialize(payload),
+                    Encoding.UTF8,
+                    "application/json");
+                return req;
+            }
+
+            using (var contactDisabled = ContactRequest(
+                new { name = "Visitor", email = "visitor@example.com", message = "Hello from integration smoke test", consent = true },
+                contactVisitorKey,
+                Proof(contactVisitorKey)))
+            using (var contactDisabledResponse = await http.SendAsync(contactDisabled))
+            {
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, contactDisabledResponse.StatusCode);
+                using var contactJson = JsonDocument.Parse(await contactDisabledResponse.Content.ReadAsStringAsync());
+                Assert.Equal("unavailable", contactJson.RootElement.GetProperty("outcome").GetString());
+            }
+
+            var oversizedContactMsg = new string('a', 65 * 1024);
+            using (var contactOversized = ContactRequest(
+                new { name = "Visitor", email = "visitor@example.com", message = oversizedContactMsg, consent = true },
+                contactVisitorKey,
+                Proof(contactVisitorKey)))
+            using (var contactOversizedResponse = await http.SendAsync(contactOversized))
+            {
+                Assert.Equal(HttpStatusCode.RequestEntityTooLarge, contactOversizedResponse.StatusCode);
+            }
+
+            using (var contactEmpty = ContactRequest(new { }, contactVisitorKey, Proof(contactVisitorKey)))
+            using (var contactEmptyResponse = await http.SendAsync(contactEmpty))
+            {
+                Assert.Equal(HttpStatusCode.BadRequest, contactEmptyResponse.StatusCode);
+            }
+
             // A production host rejects unsigned and forged identities before any
             // rate limiting or Turnstile processing.
             run.Stage = "production host startup";
@@ -397,6 +444,16 @@ public sealed class PublishedBackendSmokeTests
                 Assert.Equal(HttpStatusCode.Forbidden, unsignedJobResponse.StatusCode);
             }
 
+            using (var unsignedContact = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/contact", UriKind.Relative)))
+            {
+                unsignedContact.Content = new StringContent(
+                    JsonSerializer.Serialize(new { name = "Visitor", email = "visitor@example.com", message = "Hello", consent = true }),
+                    Encoding.UTF8,
+                    "application/json");
+                using var unsignedContactResponse = await productionHttp.SendAsync(unsignedContact);
+                Assert.Equal(HttpStatusCode.Forbidden, unsignedContactResponse.StatusCode);
+            }
+
             using (var forged = ChatRequest("visitor-198.51.100.97", ComputeWrongProof("visitor-198.51.100.97")))
             using (var forgedResponse = await productionHttp.SendAsync(forged))
             {
@@ -422,6 +479,17 @@ public sealed class PublishedBackendSmokeTests
                 ["AssistantSecurity__ProxyIdentitySecret"] = ""
             });
             Assert.Contains("ProxyIdentitySecret", proxyProbeError);
+
+            run.Stage = "startup probe with Contact enabled but missing configuration";
+            var contactConfigProbeError = await ExpectStartupFailureAsync(run, "Contact config probe", publishDir, new Dictionary<string, string>
+            {
+                ["ASPNETCORE_ENVIRONMENT"] = "Production",
+                ["Turnstile__SecretKey"] = "0x4AAAAAA_test_secret",
+                ["AssistantSecurity__ProxyIdentitySecret"] = "integration-proxy-secret",
+                ["Contact__Enabled"] = "true",
+                ["Contact__AccountId"] = ""
+            });
+            Assert.Contains("Contact:AccountId", contactConfigProbeError);
         }
         catch (OperationCanceledException ex)
         {

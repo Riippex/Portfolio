@@ -1,4 +1,5 @@
 import { AssistantChat } from "@/modules/assistant/components/assistant-chat";
+import { ContactForm } from "@/modules/contact/components/contact-form";
 import { JobMatcher } from "@/modules/job-matching/components/job-matcher";
 import { getProfile, getSelectedProjects } from "@/modules/portfolio/api";
 import Link from "next/link";
@@ -22,7 +23,7 @@ export default async function Home() {
           <a href="#work">Work</a>
           <a href="#assistant">Rafael AI</a>
           <a href="#match">Job Match</a>
-          <a href="#assistant">Contact</a>
+          <a href="#contact">Contact</a>
         </div>
         <span className="status"><i /> Building in public</span>
       </nav>
@@ -110,6 +111,14 @@ export default async function Home() {
           <p>Evaluate vacancies against verified evidence. Unverified claims remain inferences or gaps; no arbitrary scores.</p>
         </div>
         <JobMatcher />
+      </section>
+
+      <section id="contact" className="shell section contact-section">
+        <div className="section-heading">
+          <div><span className="kicker">Direct communication</span><h2>Get in touch.</h2></div>
+          <p>Send an ephemeral message directly to my inbox via Cloudflare Email Service. Zero server storage or drafts.</p>
+        </div>
+        <ContactForm />
       </section>
 
       <footer className="shell footer">
