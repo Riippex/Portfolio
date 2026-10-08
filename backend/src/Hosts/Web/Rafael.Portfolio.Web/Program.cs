@@ -29,6 +29,7 @@ builder.Services.AddSingleton<IAssistantRateLimiter>(_ => new InMemorySlidingWin
     window: TimeSpan.FromSeconds(60),
     teamLimit: 15,
     countryLimit: 100));
+builder.Services.AddSingleton<IModelControlLedger, InMemoryModelControlLedger>();
 
 var turnstileSecret = builder.Configuration["Turnstile:SecretKey"];
 var proxyIdentitySecret = builder.Configuration["AssistantSecurity:ProxyIdentitySecret"];
