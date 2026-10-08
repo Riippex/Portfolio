@@ -52,8 +52,10 @@ public sealed class EvidenceIngestionTests
         Assert.NotNull(profile);
         var focusSection = Assert.Single(profile.Sections, s => s.Slug == "focus-areas");
         Assert.Contains(focusSection.Claims, c => c.ClaimId == "claim-profile-01");
+        var contextSection = Assert.Single(profile.Sections, s => s.Slug == "professional-context");
+        Assert.Contains(contextSection.Claims, c => c.ClaimId == "claim-profile-02");
         var principlesSection = Assert.Single(profile.Sections, s => s.Slug == "engineering-principles");
-        Assert.Contains(principlesSection.Claims, c => c.ClaimId == "claim-profile-02");
+        Assert.Contains(principlesSection.Claims, c => c.ClaimId == "claim-profile-03");
     }
 
     [Fact]

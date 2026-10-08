@@ -29,8 +29,9 @@ public sealed class PortfolioCatalogTests
         var catalog = CreateCatalog();
         var profile = catalog.GetProfile();
 
-        Assert.Contains("Autonomous agents", profile.FocusAreas);
-        Assert.Contains("Computer vision", profile.FocusAreas);
+        Assert.Contains("Software engineering", profile.FocusAreas);
+        Assert.Contains("AI engineering", profile.FocusAreas);
+        Assert.Contains("Cloud fundamentals", profile.FocusAreas);
     }
 
     [Fact]

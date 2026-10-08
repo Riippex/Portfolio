@@ -1,32 +1,42 @@
 {
   "$schema": "./schema.json",
-  "version": "2026.09",
-  "lastUpdated": "2026-09-29",
+  "version": "2026.10",
+  "lastUpdated": "2026-10-08",
   "items": [
     {
       "id": "evidence-profile",
       "slug": "profile",
       "kind": "profile",
       "title": "Rafael Patiño",
-      "summary": "Building autonomous agent systems, real-time computer vision, and cloud-native products.",
-      "headline": "AI systems engineer",
-      "focusAreas": ["Autonomous agents", "Computer vision", "Cloud systems"],
-      "version": "2026.09",
-      "evidenceStatus": "pending",
-      "sourceUrl": null,
+      "summary": "Software engineering student at Universidad Manuela Beltran and AI Engineer at Expinn Technology focusing on software engineering, AI engineering, and cloud fundamentals.",
+      "headline": "Software & AI Engineer",
+      "focusAreas": [
+        "Software engineering",
+        "AI engineering",
+        "Cloud fundamentals"
+      ],
+      "version": "2026.10",
+      "evidenceStatus": "verified",
+      "sourceUrl": "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
       "documentPath": "docs/evidence/profile.md",
-      "lastReviewed": "2026-09-29",
+      "lastReviewed": "2026-10-08",
       "claims": [
         {
           "claimId": "claim-profile-01",
-          "statement": "Specializes in autonomous agents, real-time computer vision, and cloud systems.",
-          "status": "pending",
+          "statement": "Focuses on software engineering, AI engineering, and cloud fundamentals (OCI/ONE).",
+          "status": "verified",
           "citation": "docs/evidence/profile.md#focus-areas"
         },
         {
           "claimId": "claim-profile-02",
-          "statement": "Builds architectures prioritizing observability, deterministic safety boundaries, and evidence grounding.",
-          "status": "pending",
+          "statement": "Studies Software Engineering at Universidad Manuela Beltran and works as an AI Engineer at Expinn Technology.",
+          "status": "verified",
+          "citation": "docs/evidence/profile.md#professional-context"
+        },
+        {
+          "claimId": "claim-profile-03",
+          "statement": "Applies evidence-grounded software engineering principles with deterministic boundaries and transient session privacy.",
+          "status": "verified",
           "citation": "docs/evidence/profile.md#engineering-principles"
         }
       ]
