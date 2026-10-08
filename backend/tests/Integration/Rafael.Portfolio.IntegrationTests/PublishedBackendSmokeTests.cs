@@ -250,7 +250,7 @@ public sealed class PublishedBackendSmokeTests
             Assert.Equal(HttpStatusCode.OK, attackResponse.StatusCode);
             using var attackJson = JsonDocument.Parse(await attackResponse.Content.ReadAsStringAsync());
             Assert.Equal("not_documented", attackJson.RootElement.GetProperty("groundingStatus").GetString());
-            Assert.Contains("grounded strictly in Rafael's public, verified portfolio", attackJson.RootElement.GetProperty("answer").GetString()!);
+            Assert.Contains("verified public portfolio", attackJson.RootElement.GetProperty("answer").GetString()!);
             Assert.Empty(attackJson.RootElement.GetProperty("citations").EnumerateArray().ToArray());
 
             // Rotating spoofed identity headers must not bypass the shared

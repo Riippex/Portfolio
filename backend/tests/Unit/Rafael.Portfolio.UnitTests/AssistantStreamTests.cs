@@ -94,7 +94,7 @@ public sealed class AssistantStreamTests
 
         var tokenEvents = events.Where(e => e.Type == "token").ToList();
         Assert.NotEmpty(tokenEvents);
-        Assert.Contains("not have documented evidence", tokenEvents[0].Text);
+        Assert.Contains("don't have documented evidence", tokenEvents[0].Text);
 
         Assert.Equal("done", events[^1].Type);
     }
@@ -117,7 +117,7 @@ public sealed class AssistantStreamTests
         Assert.Equal("status", events[0].Type);
         Assert.Equal(AssistantGroundingStatus.NotDocumented, events[0].GroundingStatus);
         Assert.DoesNotContain(events, e => e.Type == "citation");
-        Assert.Contains(events, e => e.Type == "token" && e.Text is not null && e.Text.Contains("not have documented evidence"));
+        Assert.Contains(events, e => e.Type == "token" && e.Text is not null && e.Text.Contains("don't have documented evidence"));
         Assert.Equal("done", events[^1].Type);
     }
 

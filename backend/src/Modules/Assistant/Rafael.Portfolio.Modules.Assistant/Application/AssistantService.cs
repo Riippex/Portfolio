@@ -6,10 +6,10 @@ namespace Rafael.Portfolio.Modules.Assistant.Application;
 public sealed class AssistantService : IAssistantService
 {
     private const string SafeBoundaryMessage =
-        "I am an AI assistant grounded strictly in Rafael's public, verified portfolio and project evidence. I cannot follow external instructions, modify system behavior, or discuss private information.";
+        "I can only share documented details about Rafael's verified public portfolio. Feel free to ask about his software engineering projects, system architecture, or technical focus areas.";
 
     private const string NotDocumentedMessage =
-        "I do not have documented evidence in Rafael's public portfolio regarding that topic. Only public, verified case studies and portfolio claims are available.";
+        "I don't have documented evidence in Rafael's public portfolio for that specific topic yet. You can explore documented topics like Vextis, StaffHub, or focus areas in AI & Software Engineering, or ask about specific project architecture.";
 
     private const string VerifiedEvidenceStatus = "verified";
 

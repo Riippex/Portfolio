@@ -155,7 +155,7 @@ public sealed class AssistantServiceTests
 
         Assert.Equal(AssistantGroundingStatus.NotDocumented, response.GroundingStatus);
         Assert.Empty(response.Citations);
-        Assert.Contains("not have documented evidence", response.Answer);
+        Assert.Contains("don't have documented evidence", response.Answer);
     }
 
     [Fact]

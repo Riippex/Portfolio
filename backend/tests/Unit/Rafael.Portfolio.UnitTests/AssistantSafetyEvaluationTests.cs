@@ -51,8 +51,8 @@ public sealed class AssistantSafetyEvaluationTests
 
         Assert.Equal(AssistantGroundingStatus.NotDocumented, response.GroundingStatus);
         Assert.Empty(response.Citations);
-        Assert.Contains("grounded strictly in Rafael's public, verified portfolio", response.Answer);
-        Assert.Contains("cannot follow external instructions", response.Answer);
+        Assert.Contains("verified public portfolio", response.Answer);
+        Assert.Contains("ask about his software engineering projects", response.Answer);
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public sealed class AssistantSafetyEvaluationTests
         Assert.Equal(AssistantGroundingStatus.NotDocumented, events[0].GroundingStatus);
 
         var tokenEvent = Assert.Single(events, e => e.Type == "token");
-        Assert.Contains("grounded strictly in Rafael's public, verified portfolio", tokenEvent.Text);
+        Assert.Contains("verified public portfolio", tokenEvent.Text);
 
         var doneEvent = Assert.Single(events, e => e.Type == "done");
         Assert.True(doneEvent.Done);

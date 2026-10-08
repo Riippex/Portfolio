@@ -11,7 +11,7 @@ const INITIAL_MESSAGES: readonly AssistantChatMessage[] = [
     id: "welcome",
     role: "assistant",
     content:
-      "I am R AI, an interactive portfolio assistant grounded exclusively in versioned public evidence. Ask about Rafael's systems, focus areas, or architecture patterns.",
+      "I am R AI, an interactive portfolio assistant grounded in Rafael's verified public evidence. Ask about Rafael's systems, focus areas, or architecture patterns.",
   },
 ];
 

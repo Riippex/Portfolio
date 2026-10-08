@@ -13,7 +13,7 @@ public sealed class DeterministicGroundedSynthesizer : IAssistantSynthesizer
         if (relevantChunks.Count == 0)
         {
             return new AssistantChatResponse(
-                Answer: "I do not have documented evidence in Rafael's public portfolio regarding that topic. Only public, verified case studies and portfolio claims are available.",
+                Answer: "I don't have documented evidence in Rafael's public portfolio for that specific topic yet. You can explore documented topics like Vextis, StaffHub, or focus areas in AI & Software Engineering, or ask about specific project architecture.",
                 GroundingStatus: AssistantGroundingStatus.NotDocumented,
                 Citations: []);
         }
@@ -22,7 +22,7 @@ public sealed class DeterministicGroundedSynthesizer : IAssistantSynthesizer
         var citations = new List<AssistantCitation>();
         var sb = new StringBuilder();
 
-        sb.Append("Based on Rafael's public portfolio evidence:\n\n");
+        sb.Append("Here is the verified evidence from Rafael's public portfolio:\n\n");
 
         foreach (var chunk in topChunks)
         {
