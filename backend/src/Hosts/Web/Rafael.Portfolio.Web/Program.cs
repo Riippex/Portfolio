@@ -55,8 +55,12 @@ builder.Services.AddSingleton<ITurnstileValidator>(sp =>
         : new CloudflareTurnstileValidator(
             sp.GetRequiredService<IHttpClientFactory>().CreateClient("turnstile"),
             turnstileSecret));
-builder.Services.AddSingleton<IAssistantEvidenceAdapter, KnowledgeAssistantEvidenceAdapter>();
-builder.Services.AddSingleton<IAssistantSynthesizer, DeterministicGroundedSynthesizer>();
+builder.Services.AddSingleton<IModelProvider, DisabledModelProvider>();
+builder.Services.AddSingleton<IAssistantSynthesizer>(sp =>
+    new ModelGroundedSynthesizer(
+        sp.GetRequiredService<IModelProvider>(),
+        sp.GetRequiredService<IModelControlLedger>(),
+        new DeterministicGroundedSynthesizer()));
 builder.Services.AddSingleton<IAssistantService, AssistantService>();
 builder.Services.AddSingleton<IJobMatchingEvidenceAdapter, KnowledgeJobMatchingEvidenceAdapter>();
 builder.Services.AddSingleton<IJobDescriptionAnalyzer, DeterministicJobDescriptionAnalyzer>();
