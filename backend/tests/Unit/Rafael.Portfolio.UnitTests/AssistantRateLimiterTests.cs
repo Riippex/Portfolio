@@ -145,4 +145,43 @@ public sealed class AssistantRateLimiterTests
         Assert.True(allowed[0] <= 10 * (windows + 1), $"Granted {allowed[0]} acquisitions across {windows + 1} windows.");
         Assert.True(limiter.TrackedClientCount <= 1);
     }
+
+    [Fact]
+    public void Team_tier_grants_higher_limit()
+    {
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, teamLimit: 15, window: TimeSpan.FromSeconds(60));
+
+        for (var i = 0; i < 15; i++)
+        {
+            var allowed = limiter.TryAcquire("team-client", isTeamTier: true, countryCode: "US", out var retryAfter);
+            Assert.True(allowed);
+            Assert.Equal(TimeSpan.Zero, retryAfter);
+        }
+
+        var sixteenth = limiter.TryAcquire("team-client", isTeamTier: true, countryCode: "US", out var retry);
+        Assert.False(sixteenth);
+        Assert.True(retry > TimeSpan.Zero);
+    }
+
+    [Fact]
+    public void Country_limit_caps_aggregate_traffic_across_ips()
+    {
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, teamLimit: 15, countryLimit: 10, window: TimeSpan.FromSeconds(60));
+
+        // 2 ordinary clients in same country (each takes 5 reqs -> total 10)
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.True(limiter.TryAcquire("client-1", isTeamTier: false, countryCode: "CO", out _));
+            Assert.True(limiter.TryAcquire("client-2", isTeamTier: false, countryCode: "CO", out _));
+        }
+
+        // 3rd client in same country is blocked by country limit 10
+        var thirdClient = limiter.TryAcquire("client-3", isTeamTier: false, countryCode: "CO", out var retry);
+        Assert.False(thirdClient);
+        Assert.True(retry > TimeSpan.Zero);
+
+        // Client in a different country is allowed
+        var otherCountryClient = limiter.TryAcquire("client-other", isTeamTier: false, countryCode: "MX", out _);
+        Assert.True(otherCountryClient);
+    }
 }

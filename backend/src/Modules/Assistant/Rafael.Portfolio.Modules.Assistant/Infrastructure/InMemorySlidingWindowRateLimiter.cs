@@ -5,7 +5,10 @@ namespace Rafael.Portfolio.Modules.Assistant.Infrastructure;
 
 public sealed class InMemorySlidingWindowRateLimiter : IAssistantRateLimiter
 {
-    private readonly int _limit;
+    private readonly int _ordinaryLimit;
+    private readonly int _teamLimit;
+    private readonly int _countryLimit;
+    private readonly int _maxTrackedKeys;
     private readonly TimeSpan _window;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> _clients = new();
@@ -13,11 +16,17 @@ public sealed class InMemorySlidingWindowRateLimiter : IAssistantRateLimiter
     private DateTimeOffset _lastSweep;
 
     public InMemorySlidingWindowRateLimiter(
-        int limit = 10,
+        int limit = 5,
         TimeSpan? window = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        int teamLimit = 15,
+        int countryLimit = 100,
+        int maxTrackedKeys = 10000)
     {
-        _limit = limit > 0 ? limit : 10;
+        _ordinaryLimit = limit > 0 ? limit : 5;
+        _teamLimit = teamLimit > 0 ? teamLimit : 15;
+        _countryLimit = countryLimit > 0 ? countryLimit : 100;
+        _maxTrackedKeys = maxTrackedKeys > 0 ? maxTrackedKeys : 10000;
         _window = window ?? TimeSpan.FromSeconds(60);
         _timeProvider = timeProvider ?? TimeProvider.System;
         _lastSweep = _timeProvider.GetUtcNow();
@@ -25,50 +34,121 @@ public sealed class InMemorySlidingWindowRateLimiter : IAssistantRateLimiter
 
     internal int TrackedClientCount => _clients.Count;
 
-    public bool TryAcquire(string clientKey, out TimeSpan retryAfter)
+    public bool TryAcquire(string clientKey, out TimeSpan retryAfter) =>
+        TryAcquire(clientKey, isTeamTier: false, countryCode: null, out retryAfter);
+
+    public bool TryAcquire(
+        string clientKey,
+        bool isTeamTier,
+        string? countryCode,
+        out TimeSpan retryAfter)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(clientKey);
 
         var now = _timeProvider.GetUtcNow();
-        bool allowed;
+        var ipLimit = isTeamTier ? _teamLimit : _ordinaryLimit;
+        var normalizedCountry = string.IsNullOrWhiteSpace(countryCode) ? null : countryCode.Trim().ToUpperInvariant();
+        var countryKey = normalizedCountry is null ? null : $"country:{normalizedCountry}";
 
-        while (true)
+        if (_clients.Count >= _maxTrackedKeys && !_clients.ContainsKey(clientKey) && (countryKey is null || !_clients.ContainsKey(countryKey)))
         {
-            var queue = _clients.GetOrAdd(clientKey, static _ => new Queue<DateTimeOffset>());
+            retryAfter = TimeSpan.FromSeconds(1);
+            SweepExpiredClients(now);
+            return false;
+        }
 
-            lock (queue)
-            {
-                // A concurrent sweep may have detached this queue between
-                // GetOrAdd and the lock; retry against the live entry so the
-                // acquisition is never recorded in an orphaned queue.
-                if (!_clients.TryGetValue(clientKey, out var current) ||
-                    !ReferenceEquals(current, queue))
-                {
-                    continue;
-                }
-
-                Prune(queue, now);
-
-                if (queue.Count < _limit)
-                {
-                    queue.Enqueue(now);
-                    retryAfter = TimeSpan.Zero;
-                    allowed = true;
-                }
-                else
-                {
-                    var oldest = queue.Peek();
-                    var remaining = _window - (now - oldest);
-                    retryAfter = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromSeconds(1);
-                    allowed = false;
-                }
-
-                break;
-            }
+        if (!TryCheckAndReserve(clientKey, ipLimit, countryKey, _countryLimit, now, out retryAfter))
+        {
+            SweepExpiredClients(now);
+            return false;
         }
 
         SweepExpiredClients(now);
-        return allowed;
+        return true;
+    }
+
+    private bool TryCheckAndReserve(
+        string ipKey,
+        int ipLimit,
+        string? countryKey,
+        int countryLimit,
+        DateTimeOffset now,
+        out TimeSpan retryAfter)
+    {
+        while (true)
+        {
+            var ipQueue = _clients.GetOrAdd(ipKey, static _ => new Queue<DateTimeOffset>());
+            var countryQueue = countryKey is null ? null : _clients.GetOrAdd(countryKey, static _ => new Queue<DateTimeOffset>());
+
+            if (countryQueue is null)
+            {
+                lock (ipQueue)
+                {
+                    if (!_clients.TryGetValue(ipKey, out var currentIp) || !ReferenceEquals(currentIp, ipQueue))
+                    {
+                        continue;
+                    }
+
+                    Prune(ipQueue, now);
+
+                    if (ipQueue.Count >= ipLimit)
+                    {
+                        var oldest = ipQueue.Peek();
+                        var remaining = _window - (now - oldest);
+                        retryAfter = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromSeconds(1);
+                        return false;
+                    }
+
+                    ipQueue.Enqueue(now);
+                    retryAfter = TimeSpan.Zero;
+                    return true;
+                }
+            }
+
+            var firstKey = string.CompareOrdinal(ipKey, countryKey) <= 0 ? ipKey : countryKey;
+            var firstQueue = ReferenceEquals(firstKey, ipKey) ? ipQueue : countryQueue;
+            var secondQueue = ReferenceEquals(firstKey, ipKey) ? countryQueue : ipQueue;
+
+            lock (firstQueue)
+            {
+                lock (secondQueue)
+                {
+                    if (!_clients.TryGetValue(ipKey, out var currentIp) || !ReferenceEquals(currentIp, ipQueue) ||
+                        !_clients.TryGetValue(countryKey!, out var currentCountry) || !ReferenceEquals(currentCountry, countryQueue))
+                    {
+                        continue;
+                    }
+
+                    Prune(ipQueue, now);
+                    Prune(countryQueue, now);
+
+                    if (ipQueue.Count >= ipLimit)
+                    {
+                        var oldest = ipQueue.Peek();
+                        var remaining = _window - (now - oldest);
+                        retryAfter = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromSeconds(1);
+                        return false;
+                    }
+
+                    if (countryQueue.Count >= countryLimit)
+                    {
+                        var oldest = countryQueue.Peek();
+                        var remaining = _window - (now - oldest);
+                        retryAfter = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromSeconds(1);
+                        return false;
+                    }
+
+                    ipQueue.Enqueue(now);
+                    if (!string.Equals(ipKey, countryKey, StringComparison.Ordinal))
+                    {
+                        countryQueue.Enqueue(now);
+                    }
+
+                    retryAfter = TimeSpan.Zero;
+                    return true;
+                }
+            }
+        }
     }
 
     private void SweepExpiredClients(DateTimeOffset now)

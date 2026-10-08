@@ -47,9 +47,9 @@ describe("assistant stream proxy", () => {
     expect(response.status).toBe(200);
 
     const headers = calls[0].init.headers as Record<string, string>;
-    expect(headers["X-Client-Key"]).toBe("203.0.113.7");
+    expect(headers["X-Client-Key"]).toBe("v1:203.0.113.7:XX:ordinary:prod");
     expect(headers["X-Client-Key-Proof"]).toBe(
-      await hmacSha256Hex("proxy-test-secret", "203.0.113.7")
+      await hmacSha256Hex("proxy-test-secret", "v1:203.0.113.7:XX:ordinary:prod")
     );
 
     // Caller-controlled identity headers must not be forwarded as-is.
@@ -97,10 +97,12 @@ describe("assistant stream proxy", () => {
 
     expect(response.status).toBe(200);
     const headers = calls[0].init.headers as Record<string, string>;
-    expect(headers["X-Client-Key"]).toBe("203.0.113.7");
+    expect(headers["X-Client-Key"]).toBe("v1:203.0.113.7:XX:ordinary:prod");
   });
 
   it("sends no identity headers when the proxy secret is not configured", async () => {
+    vi.stubEnv("PORTFOLIO_STAGE", "dev");
+    vi.stubEnv("TEAM_ALLOWLIST", "203.0.113.7");
     vi.stubEnv("ASSISTANT_PROXY_IDENTITY_SECRET", "");
     const calls = captureFetch();
 

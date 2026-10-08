@@ -30,7 +30,7 @@ public static class JobMatchingEndpoints
                 return Results.Json(new { error = identityError }, statusCode: StatusCodes.Status403Forbidden);
             }
 
-            if (!rateLimiter.TryAcquire(identity!.RateLimitKey!, out var retryAfter))
+            if (!rateLimiter.TryAcquire(identity!.RateLimitKey!, identity.IsTeamTier, identity.CountryCode, out var retryAfter))
             {
                 httpContext.Response.Headers.RetryAfter = Math.Ceiling(retryAfter.TotalSeconds).ToString();
                 return Results.Json(

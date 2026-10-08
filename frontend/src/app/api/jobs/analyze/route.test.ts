@@ -46,9 +46,9 @@ describe("job matching proxy route", () => {
     expect(response.status).toBe(200);
 
     const headers = calls[0].init.headers as Record<string, string>;
-    expect(headers["X-Client-Key"]).toBe("203.0.113.12");
+    expect(headers["X-Client-Key"]).toBe("v1:203.0.113.12:XX:ordinary:prod");
     expect(headers["X-Client-Key-Proof"]).toBe(
-      await hmacSha256Hex("proxy-test-secret", "203.0.113.12")
+      await hmacSha256Hex("proxy-test-secret", "v1:203.0.113.12:XX:ordinary:prod")
     );
     expect(headers["CF-Connecting-IP"]).toBeUndefined();
   });
@@ -75,6 +75,7 @@ describe("job matching proxy route", () => {
   });
 
   it("forwards backend error status and Retry-After header", async () => {
+    vi.stubEnv("ASSISTANT_PROXY_IDENTITY_SECRET", "proxy-test-secret");
     vi.stubGlobal("fetch", vi.fn(async () => {
       return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
         status: 429,
@@ -84,7 +85,7 @@ describe("job matching proxy route", () => {
 
     const request = new Request("http://localhost/api/jobs/analyze", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.12" },
       body: JSON.stringify({ vacancyText: "Looking for an Autonomous Agents architect." }),
     });
 

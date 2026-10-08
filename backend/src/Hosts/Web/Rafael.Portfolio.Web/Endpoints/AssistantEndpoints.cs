@@ -30,7 +30,10 @@ public static class AssistantEndpoints
     internal sealed record ClientIdentity(
         ClientIdentityStatus Status,
         string? RateLimitKey,
-        string? TurnstileRemoteIp);
+        string? TurnstileRemoteIp,
+        bool IsTeamTier = false,
+        string? CountryCode = null,
+        string? Stage = null);
 
     public static RouteGroupBuilder MapAssistantEndpoints(this RouteGroupBuilder api)
     {
@@ -53,7 +56,7 @@ public static class AssistantEndpoints
                 return Results.Json(new { error = identityError }, statusCode: StatusCodes.Status403Forbidden);
             }
 
-            if (!rateLimiter.TryAcquire(identity!.RateLimitKey!, out var retryAfter))
+            if (!rateLimiter.TryAcquire(identity!.RateLimitKey!, identity.IsTeamTier, identity.CountryCode, out var retryAfter))
             {
                 httpContext.Response.Headers.RetryAfter = Math.Ceiling(retryAfter.TotalSeconds).ToString();
                 return Results.Json(
@@ -137,7 +140,7 @@ public static class AssistantEndpoints
                 return;
             }
 
-            if (!rateLimiter.TryAcquire(identity!.RateLimitKey!, out var retryAfter))
+            if (!rateLimiter.TryAcquire(identity!.RateLimitKey!, identity.IsTeamTier, identity.CountryCode, out var retryAfter))
             {
                 httpContext.Response.Headers.RetryAfter = Math.Ceiling(retryAfter.TotalSeconds).ToString();
                 httpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
@@ -254,13 +257,31 @@ public static class AssistantEndpoints
 
         if (status is ClientIdentityStatus.ValidSigned)
         {
-            // The raw visitor id leaves the process only inside this request's
-            // Turnstile verification; the rate-limit key is an opaque HMAC
-            // derivative that is never logged or reversible.
+            var isV1 = visitorId!.StartsWith("v1:", StringComparison.Ordinal);
+            var visitorIp = visitorId;
+            var countryCode = "XX";
+            var isTeamTier = false;
+            string? stage = null;
+
+            if (isV1)
+            {
+                var parts = visitorId.Split(':');
+                if (parts.Length >= 5)
+                {
+                    visitorIp = parts[1];
+                    countryCode = parts[2];
+                    isTeamTier = string.Equals(parts[3], "team", StringComparison.OrdinalIgnoreCase);
+                    stage = parts[4];
+                }
+            }
+
             identity = new ClientIdentity(
                 status,
-                DeriveOpaqueKey(identitySecret, $"ratelimit:{visitorId}"),
-                visitorId);
+                DeriveOpaqueKey(identitySecret, $"ratelimit:{visitorIp}"),
+                visitorIp,
+                IsTeamTier: isTeamTier,
+                CountryCode: countryCode,
+                Stage: stage);
             return null;
         }
 

@@ -24,7 +24,11 @@ builder.Services.AddSingleton<IEvidenceRetriever>(sp =>
     new InMemoryLexicalEvidenceRetriever(sp.GetRequiredService<IEvidenceSource>()));
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IAssistantSafetyEvaluator, AssistantSafetyEvaluator>();
-builder.Services.AddSingleton<IAssistantRateLimiter>(_ => new InMemorySlidingWindowRateLimiter(10, TimeSpan.FromSeconds(60)));
+builder.Services.AddSingleton<IAssistantRateLimiter>(_ => new InMemorySlidingWindowRateLimiter(
+    limit: 5,
+    window: TimeSpan.FromSeconds(60),
+    teamLimit: 15,
+    countryLimit: 100));
 
 var turnstileSecret = builder.Configuration["Turnstile:SecretKey"];
 var proxyIdentitySecret = builder.Configuration["AssistantSecurity:ProxyIdentitySecret"];
