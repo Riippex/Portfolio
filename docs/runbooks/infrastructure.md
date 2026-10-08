@@ -145,6 +145,18 @@ No service account key is created or permitted, and the deployer cannot apply in
 
 ## Cost and resource bounds
 
+The container explicitly sets `resources.cpu_idle = true` for request-based
+billing. When `resources` includes CPU/memory limits, omitting this setting can
+select continuous CPU allocation and instance-based billing. Request-based
+billing still charges instance startup/shutdown and active request processing;
+scale-to-zero and budget alerts are not hard spending caps.
+
+Both scaling scopes stay Terraform-owned: service-level `AUTOMATIC` scaling with
+the configured minimum, and revision-level minimum/maximum limits. Explicit
+service-level configuration absorbs API-returned defaults without ignoring
+scaling changes. Confirm the effective billing/scaling settings and require a
+fresh no-change plan after bootstrap or maintenance.
+
 | Resource | Setting | Rationale |
 |---|---|---|
 | Cloud Run min / max instances | `0` / `2` | Scale to zero; bounded burst |
@@ -192,5 +204,5 @@ done
 
 ## Known limits
 
-- Everything above is validated offline. No plan, apply, deployment, GitHub run, or provider API call has been made, so live behavior is unverified: the Wrangler secret-list gate, the exact deploy metadata Cloud Run records (which decides whether the ignore list is complete), and the identity condition against a real GitHub token.
+- Offline checks validate configuration, not a target environment's live state. Record actual bootstrap and smoke results separately; never infer deployment from a successful test or plan. The real Worker secret-list gate, release metadata preservation, GitHub OIDC exchange and end-to-end identity/human verification require live checks.
 - Two Terraform stacks cannot see each other's outputs; the backend URL is carried by the GitHub environment variable.

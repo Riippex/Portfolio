@@ -100,6 +100,13 @@ resource "google_cloud_run_v2_service" "backend" {
   # behind the plan-time prevent_destroy below.
   deletion_protection = true
 
+  # Manage service-level defaults returned by the API as well as revision limits.
+  # Keeping this explicit avoids a perpetual plan to remove the scaling block.
+  scaling {
+    scaling_mode       = "AUTOMATIC"
+    min_instance_count = var.min_instances
+  }
+
   template {
     service_account = google_service_account.backend.email
 
@@ -116,6 +123,8 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       resources {
+        # With explicit limits, Cloud Run requires this to retain request-based billing.
+        cpu_idle = true
         limits = {
           cpu    = var.cpu_limit
           memory = var.memory_limit

@@ -145,6 +145,29 @@ function resourceBlock(text, type, name) {
   return hclBlock(text, new RegExp(`resource\\s+"${type}"\\s+"${name}"`));
 }
 
+// Find a direct child block, not a similarly named block in a nested scope.
+function directHclBlock(text, name) {
+  let depth = 0;
+  let inString = false;
+  const header = new RegExp(`^${name}\\s*\\{`);
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i += 1;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') {
+      inString = true;
+    } else {
+      if (depth === 0 && (i === 0 || !/\w/.test(text[i - 1])) && header.test(text.slice(i))) {
+        return hclBlock(text.slice(i), header);
+      }
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+    }
+  }
+  return null;
+}
+
 function listItems(body) {
   return body
     .split(/,|\n/)
@@ -347,6 +370,22 @@ export function checkDeployment(files) {
     fail("bootstrap", "create_service must default to false so the first apply cannot require a service");
   }
   const serviceBlock = resourceBlock(gcp.main, "google_cloud_run_v2_service", "backend") ?? "";
+  const serviceScaling = directHclBlock(serviceBlock, "scaling") ?? "";
+  const serviceTemplate = directHclBlock(serviceBlock, "template") ?? "";
+  const revisionScaling = directHclBlock(serviceTemplate, "scaling") ?? "";
+  const container = directHclBlock(serviceTemplate, "containers") ?? "";
+  const containerResources = directHclBlock(container, "resources") ?? "";
+  if (!/^\s*cpu_idle\s*=\s*true\s*$/m.test(containerResources)) {
+    fail("request-billing", "the backend container must explicitly set cpu_idle = true for request-based billing");
+  }
+  if (!/^\s*scaling_mode\s*=\s*"AUTOMATIC"\s*$/m.test(serviceScaling) ||
+      !/^\s*min_instance_count\s*=\s*var\.min_instances\s*$/m.test(serviceScaling)) {
+    fail("service-scaling", "service-level scaling must explicitly select AUTOMATIC and the configured minimum");
+  }
+  if (!/^\s*min_instance_count\s*=\s*var\.min_instances\s*$/m.test(revisionScaling) ||
+      !/^\s*max_instance_count\s*=\s*var\.max_instances\s*$/m.test(revisionScaling)) {
+    fail("revision-scaling", "revision-level scaling must retain the configured minimum and maximum");
+  }
   for (const [label, block] of [
     ["the Cloud Run service", serviceBlock],
     ["the public invoker", resourceBlock(gcp.main, "google_cloud_run_v2_service_iam_member", "public_invoker") ?? ""],

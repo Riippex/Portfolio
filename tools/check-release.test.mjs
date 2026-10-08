@@ -183,8 +183,10 @@ for (const [name, edit, prefix] of [
 
 for (const [name, path, edit, prefix] of [
   // The bypass a defaults-only check missed: the variable stays 2 but the service ignores it.
+  ["continuous CPU allocation", GCP_MAIN, replace("cpu_idle = true", "cpu_idle = false"), "cost-bounds:the backend container must explicitly select"],
+  ["CPU billing setting omitted", GCP_MAIN, replace(/\s+cpu_idle = true\n/, "\n"), "cost-bounds:the backend container must explicitly select"],
   ["max_instance_count replaced with 100", GCP_MAIN, replace("max_instance_count = var.max_instances", "max_instance_count = 100"), "cost-bounds:the service must set max_instance_count"],
-  ["min_instance_count replaced with 1", GCP_MAIN, replace("min_instance_count = var.min_instances", "min_instance_count = 1"), "cost-bounds:the service must set min_instance_count"],
+  ["revision min_instance_count replaced with 1", GCP_MAIN, replace(/(    scaling \{\s*min_instance_count\s*=\s*)var.min_instances/, (_, head) => `${head}1`), "cost-bounds:the service must set min_instance_count"],
   ["cpu replaced with a literal", GCP_MAIN, replace(/cpu(\s+)= var\.cpu_limit/, "cpu$1= \"8000m\""), "cost-bounds:the service must set cpu"],
   ["memory replaced with a literal", GCP_MAIN, replace(/memory(\s+)= var\.memory_limit/, "memory$1= \"8Gi\""), "cost-bounds:the service must set memory"],
   ["max_instances default raised", GCP_VARS, replace(/(variable "max_instances"[\s\S]*?default\s*=\s*)2/, (_, head) => `${head}100`), "cost-bounds:var.max_instances must default to 2"],

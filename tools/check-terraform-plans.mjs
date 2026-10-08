@@ -163,7 +163,7 @@ function proveCredentialSecrecy(work) {
 // 2. GCP foundation-to-service transition and removal safeguard
 // ---------------------------------------------------------------------------------------
 
-function establishedServiceState(work) {
+function establishedServiceState(work, configured = null) {
   const schema = JSON.parse(terraform(gcpDir, ["providers", "schema", "-json"]).stdout);
   const service = schema.provider_schemas["registry.terraform.io/hashicorp/google"].resource_schemas.google_cloud_run_v2_service;
 
@@ -179,6 +179,12 @@ function establishedServiceState(work) {
     project: "synthetic-project",
     ingress: "INGRESS_TRAFFIC_ALL",
   });
+  if (configured) {
+    Object.assign(attributes, structuredClone(configured));
+    // Model API-returned defaults that caused live service-level scaling drift.
+    attributes.scaling[0].manual_instance_count = 0;
+    attributes.template[0].containers[0].resources[0].startup_cpu_boost = false;
+  }
 
   const state = {
     version: 4,
@@ -197,7 +203,7 @@ function establishedServiceState(work) {
     ],
     check_results: null,
   };
-  const path = join(work, "established-service.tfstate");
+  const path = join(work, configured ? "configured-service.tfstate" : "established-service.tfstate");
   writeFileSync(path, JSON.stringify(state));
   return path;
 }
@@ -239,6 +245,33 @@ function proveServiceTransition(work) {
   record(run.status === 0 && serviceActions(run.changes).join() === "create", "service phase with the persisted inputs creates the service");
   const serviceIam = run.changes.filter((change) => /^google_cloud_run_v2_service_iam_member\./.test(change.address));
   record(serviceIam.length === 2, "service phase creates the public invoker and the CI deployer binding", `${serviceIam.length} bindings`);
+
+  const serviceCreation = run.changes.find((change) => change.address === "google_cloud_run_v2_service.backend[0]");
+  const configuredService = serviceCreation?.change.after;
+  record(configuredService?.template[0].containers[0].resources[0].cpu_idle === true,
+    "service creation explicitly selects request-based CPU billing");
+  record(configuredService?.scaling[0].scaling_mode === "AUTOMATIC" && configuredService.scaling[0].min_instance_count === 0,
+    "service creation explicitly selects automatic service-level scaling with zero minimum");
+  record(configuredService?.template[0].scaling[0].min_instance_count === 0 && configuredService.template[0].scaling[0].max_instance_count === 2,
+    "service creation retains revision-level zero-to-two bounds");
+  if (configuredService) {
+    // Creation plans leave optional fields null; let the provider normalize those
+    // synthetic values before checking the API defaults that caused live drift.
+    const initialState = establishedServiceState(work, configuredService);
+    const normalized = gcpPlan(work, "fixture normalization", initialState, persisted, { save: true });
+    const normalizedService = normalized.changes.find((change) => change.address === "google_cloud_run_v2_service.backend[0]")?.change.after;
+    record(normalized.status === 0 && Boolean(normalizedService), "configured fixture normalizes through the provider without refresh");
+    const configuredState = establishedServiceState(work, normalizedService ?? configuredService);
+    run = gcpPlan(work, "API defaults maintenance", configuredState, persisted, { save: true });
+    const delta = run.changes.find((change) => change.address === "google_cloud_run_v2_service.backend[0]")?.change;
+    // Synthetic state has no Ready/URL metadata, so computed fields can still
+    // plan an update. Assert the managed configuration; real no-drift needs refresh.
+    record(run.status === 0 && Boolean(delta) &&
+      !delta.actions.some((action) => action === "create" || action === "delete") &&
+      JSON.stringify(delta.before.scaling) === JSON.stringify(delta.after.scaling) &&
+      JSON.stringify(delta.before.template) === JSON.stringify(delta.after.template),
+      "API-returned defaults preserve service scaling and the complete managed template");
+  }
 
   // Established service, same persisted inputs: ordinary maintenance keeps it.
   run = gcpPlan(work, "maintenance", established, persisted, { save: true });

@@ -278,6 +278,13 @@ export function checkRelease(files) {
 
   // 4. Scaling and size limits are wired from the variables that carry the bounds ---------
   const service = hclBlock(gcpMain, /resource\s+"google_cloud_run_v2_service"\s+"backend"/) ?? "";
+  const template = hclBlock(service, /\btemplate\s*\{/) ?? "";
+  const revisionScaling = hclBlock(template, /\bscaling\s*\{/) ?? "";
+  const container = hclBlock(template, /\bcontainers\s*\{/) ?? "";
+  const resources = hclBlock(container, /\bresources\s*\{/) ?? "";
+  if (!/^\s*cpu_idle\s*=\s*true\s*$/m.test(resources)) {
+    fail("cost-bounds", "the backend container must explicitly select request-based CPU billing");
+  }
   const gcpVariables = stripHcl(text("deployment/gcp/variables.tf"));
   for (const [attribute, variable, expected] of [
     ["min_instance_count", "min_instances", "0"],
@@ -285,7 +292,8 @@ export function checkRelease(files) {
     ["cpu", "cpu_limit", '"1000m"'],
     ["memory", "memory_limit", '"512Mi"'],
   ]) {
-    if (!new RegExp(`\\b${attribute}\\s*=\\s*var\\.${variable}\\b`).test(service)) {
+    const scope = attribute.endsWith("instance_count") ? revisionScaling : resources;
+    if (!new RegExp(`\\b${attribute}\\s*=\\s*var\\.${variable}\\b`).test(scope)) {
       fail("cost-bounds", `the service must set ${attribute} from var.${variable}`);
     }
     if (variableDefault(gcpVariables, variable) !== expected) {

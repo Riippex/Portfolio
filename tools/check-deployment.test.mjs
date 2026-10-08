@@ -48,6 +48,17 @@ const cases = [
   ["runtime environment follows the stage", GCP_MAIN, replace('aspnetcore_environment = "Production"', 'aspnetcore_environment = var.environment == "prod" ? "Production" : "Development"'), "runtime-environment"],
   ["environment variable literal instead of the local", GCP_MAIN, replace("value = local.aspnetcore_environment", 'value = "Production"'), "runtime-environment"],
 
+  // Billing and both scaling scopes
+  ["request-based CPU setting omitted", GCP_MAIN, replace(/\s+cpu_idle = true\n/, "\n"), "request-billing"],
+  ["continuous CPU enabled", GCP_MAIN, replace("cpu_idle = true", "cpu_idle = false"), "request-billing"],
+  ["CPU setting only in a comment", GCP_MAIN, replace("cpu_idle = true", "# cpu_idle = true"), "request-billing"],
+  ["CPU setting in the wrong scope", GCP_MAIN, (text) => text.replace(/\s+cpu_idle = true\n/, "\n").replace("  template {", "  cpu_idle = true\n  template {"), "request-billing"],
+  ["service-level scaling omitted", GCP_MAIN, replace(/\n  scaling \{[\s\S]*?\n  \}\n/, "\n"), "service-scaling"],
+  ["manual service scaling selected", GCP_MAIN, replace('"AUTOMATIC"', '"MANUAL"'), "service-scaling"],
+  ["service minimum detached from stage inputs", GCP_MAIN, replace("min_instance_count = var.min_instances", "min_instance_count = 1"), "service-scaling"],
+  ["revision maximum detached from stage inputs", GCP_MAIN, replace("max_instance_count = var.max_instances", "max_instance_count = 20"), "revision-scaling"],
+  ["revision-level scaling omitted", GCP_MAIN, replace(/\n    scaling \{[\s\S]*?\n    \}\n/, "\n"), "revision-scaling"],
+
   // Secrets out of state
   ["secret version owned by Terraform", GCP_MAIN, append('resource "google_secret_manager_secret_version" "v" {\n  secret_data = "x"\n}'), "secret-state"],
   ["Turnstile widget owned by Terraform", CF_MAIN, append('resource "cloudflare_turnstile_widget" "w" {}'), "secret-state"],
@@ -85,6 +96,8 @@ const cases = [
   // Terraform versus deploy ownership
   ["service ignores its whole template", GCP_MAIN, replace("template[0].labels,", "template[0].labels,\n      template,"), "release-ownership"],
   ["service ignores scaling", GCP_MAIN, replace("template[0].labels,", "template[0].labels,\n      template[0].scaling,"), "release-ownership"],
+  ["service ignores service-level scaling", GCP_MAIN, replace("template[0].labels,", "template[0].labels,\n      scaling,"), "release-ownership"],
+  ["service ignores CPU allocation", GCP_MAIN, replace("template[0].labels,", "template[0].labels,\n      template[0].containers[0].resources[0].cpu_idle,"), "release-ownership"],
   ["service ignores everything", GCP_MAIN, replace(/ignore_changes = \[[\s\S]*?\n {4}\]/, "ignore_changes = all"), "release-ownership"],
   ["service no longer ignores the image", GCP_MAIN, replace("      template[0].containers[0].image,\n", ""), "release-ownership"],
 
@@ -151,4 +164,13 @@ for (const [name, path, edit, id] of cases) {
 test("every case names a distinct, non-empty mutation", () => {
   const names = cases.map(([name]) => name);
   assert.equal(new Set(names).size, names.length);
+});
+
+test("service and revision scaling are recognized independently of block order", () => {
+  const files = mutate(GCP_MAIN, (text) => {
+    const block = /\n  scaling \{[\s\S]*?\n  \}\n/.exec(text)?.[0];
+    assert.ok(block);
+    return text.replace(block, "\n").replace("  lifecycle {", `${block}\n  lifecycle {`);
+  });
+  assert.deepEqual(checkDeployment(files), []);
 });
