@@ -50,8 +50,9 @@ any provider URL. The outgoing message uses the configured sender and recipient,
 the static subject `Portfolio contact message`, plain text only, and the
 visitor's email as `reply_to`.
 
-The backend also requires the signed proxy identity (`X-Client-Key` and
-`X-Client-Key-Proof`) outside Development and Test, applies a separate Contact
+The backend also requires the signed visitor identity (`X-Portfolio-Identity` and
+`X-Portfolio-Identity-Proof`, bound to the stage and to `POST /v1/contact`) outside
+Development and Test, applies a separate Contact
 rate limit (3 attempts per 10 minutes per identity by default), and verifies
 Turnstile before any delivery.
 
@@ -118,9 +119,12 @@ form). Defaults keep Contact off.
 | `Contact:RecipientEmail` | `Contact__RecipientEmail` | `<owner-inbox>@<mail-domain>` | Required when enabled. Must be a verified destination. |
 | `Turnstile:SecretKey` | `Turnstile__SecretKey` | `<turnstile-secret>` | Required outside Development and Test. |
 | `AssistantSecurity:ProxyIdentitySecret` | `AssistantSecurity__ProxyIdentitySecret` | `<shared-proxy-secret>` | Required outside Development and Test; must equal the frontend secret. |
+| `Portfolio:Stage` | `Portfolio__Stage` | `dev` or `prod` | Required outside Development and Test (Terraform sets it); an unset or unknown value stops the host. `local` is accepted only in Development and Test. |
 
 Frontend (server-side unless noted): `ASSISTANT_PROXY_IDENTITY_SECRET`
-(`<shared-proxy-secret>`), `BACKEND_API_URL` (`<backend-base-url>`), and
+(`<shared-proxy-secret>`), `TEAM_ALLOWLIST` (a Worker secret: a JSON array of at most
+64 exact IPs, separate per environment), `PORTFOLIO_STAGE` (`dev` or `prod`, written by
+the build), `BACKEND_API_URL` (`<backend-base-url>`), and
 `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (`<turnstile-site-key>`, public by design).
 
 With `Contact:Enabled=true` the host refuses to start unless the account, token,

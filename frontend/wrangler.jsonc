@@ -8,25 +8,54 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
-  "main": "vinext/server/fetch-handler",
+  // The Worker entry admits every request (private dev allowlist, edge rate limits) and then
+  // hands it to Vinext. See worker/entry.ts and src/modules/security/admission.ts.
+  "main": "worker/entry.ts",
   "assets": {
     "directory": "dist/client",
     "not_found_handling": "none",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    // Without this Cloudflare answers static asset requests before any Worker code runs, so
+    // the dev allowlist would not cover assets. The Vinext handler serves them through the
+    // ASSETS binding after admission.
+    "run_worker_first": true
   },
-  // Only non-secret runtime values are written by the deploy command
-  // (--var PORTFOLIO_BACKEND_URL:...). ASSISTANT_PROXY_IDENTITY_SECRET is a Worker secret
-  // set out of band on the exact Worker named above; it is never listed here.
+  // Plaintext values are per environment (vars and ratelimits are not inherited), so every
+  // stage declares its own PORTFOLIO_STAGE and rate-limit bindings. The stage is explicit
+  // and server-side only; nothing derives it from NODE_ENV or the hostname. The deploy
+  // command adds PORTFOLIO_BACKEND_URL (--var). Secrets are set out of band on the exact
+  // Worker named below and are never listed here: ASSISTANT_PROXY_IDENTITY_SECRET and
+  // TEAM_ALLOWLIST (a JSON array of at most 64 exact IPs, separate per environment).
+  //
+  // Rate-limit bindings count per Cloudflare location and are eventually consistent, so the
+  // edge limits are approximate. They are the first line before backend dispatch; the backend
+  // keeps its own independent limits. Namespace ids are unique per account and per stage.
   "env": {
     "dev": {
       "name": "rafael-portfolio-frontend-dev",
       // dev has no custom route, so it is reached on workers.dev.
-      "workers_dev": true
+      "workers_dev": true,
+      "vars": {
+        "PORTFOLIO_STAGE": "dev"
+      },
+      "ratelimits": [
+        { "name": "RATE_LIMIT_IP_ORDINARY", "namespace_id": "1101", "simple": { "limit": 5, "period": 60 } },
+        { "name": "RATE_LIMIT_IP_TEAM", "namespace_id": "1102", "simple": { "limit": 15, "period": 60 } },
+        { "name": "RATE_LIMIT_COUNTRY", "namespace_id": "1103", "simple": { "limit": 100, "period": 60 } }
+      ]
     },
     "prod": {
       "name": "rafael-portfolio-frontend-prod",
       // prod is served only through the Terraform-owned zone route.
-      "workers_dev": false
+      "workers_dev": false,
+      "vars": {
+        "PORTFOLIO_STAGE": "prod"
+      },
+      "ratelimits": [
+        { "name": "RATE_LIMIT_IP_ORDINARY", "namespace_id": "1201", "simple": { "limit": 5, "period": 60 } },
+        { "name": "RATE_LIMIT_IP_TEAM", "namespace_id": "1202", "simple": { "limit": 15, "period": 60 } },
+        { "name": "RATE_LIMIT_COUNTRY", "namespace_id": "1203", "simple": { "limit": 100, "period": 60 } }
+      ]
     }
   }
 }

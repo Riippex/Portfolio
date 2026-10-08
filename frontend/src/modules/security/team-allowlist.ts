@@ -1,74 +1,43 @@
-export function canonicalizeIp(rawIp: string): string {
-  if (!rawIp) return "";
-  let trimmed = rawIp.trim();
-  if (!trimmed) return "";
+import { canonicalizeIp } from "./ip";
 
-  if (trimmed.startsWith("[") && trimmed.includes("]")) {
-    const endBracket = trimmed.indexOf("]");
-    trimmed = trimmed.substring(1, endBracket);
-  } else if (trimmed.includes(":") && trimmed.indexOf(":") === trimmed.lastIndexOf(":")) {
-    trimmed = trimmed.split(":")[0];
+export const MAX_ALLOWLIST_ENTRIES = 64;
+const MAX_ALLOWLIST_CHARS = 8192;
+
+export type TeamAllowlist =
+  | { readonly status: "absent" }
+  | { readonly status: "invalid" }
+  | { readonly status: "ok"; readonly ips: readonly string[] };
+
+/**
+ * Parses the per-environment TEAM_ALLOWLIST secret: a JSON array of at most 64 exact IP
+ * strings. Anything else is "invalid" and never partially accepted: comma lists, objects,
+ * non-strings, CIDRs, ports, wildcards, whitespace and malformed addresses all invalidate the
+ * whole value. Equivalent IPv6 spellings are normalised to one canonical form.
+ */
+export function parseTeamAllowlist(raw: unknown): TeamAllowlist {
+  if (raw === undefined || raw === null || raw === "") return { status: "absent" };
+  if (typeof raw !== "string" || raw.length > MAX_ALLOWLIST_CHARS) return { status: "invalid" };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "invalid" };
   }
 
-  const isIPv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(trimmed);
-  if (isIPv4) {
-    const parts = trimmed.split(".").map((p) => parseInt(p, 10));
-    if (parts.every((p) => p >= 0 && p <= 255)) {
-      return parts.join(".");
-    }
-  }
+  if (!Array.isArray(parsed) || parsed.length > MAX_ALLOWLIST_ENTRIES) return { status: "invalid" };
 
-  const isIPv6 = /^[0-9a-fA-F:]+$/.test(trimmed) && trimmed.includes(":");
-  if (isIPv6) {
-    return trimmed.toLowerCase();
-  }
-
-  return trimmed;
-}
-
-export function parseTeamAllowlist(rawSecret: string | undefined): { valid: boolean; ips: string[] } {
-  if (!rawSecret || !rawSecret.trim()) {
-    return { valid: true, ips: [] };
-  }
-
-  const trimmed = rawSecret.trim();
-  let entries: string[] = [];
-
-  if (trimmed.startsWith("[")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (!Array.isArray(parsed)) {
-        return { valid: false, ips: [] };
-      }
-      entries = parsed.map((e) => String(e));
-    } catch {
-      return { valid: false, ips: [] };
-    }
-  } else {
-    entries = trimmed.split(/[\s,]+/).filter(Boolean);
-  }
-
-  if (entries.length > 64) {
-    return { valid: false, ips: [] };
-  }
-
-  const canonicalIps: string[] = [];
-  for (const entry of entries) {
+  const ips = new Set<string>();
+  for (const entry of parsed) {
     const canonical = canonicalizeIp(entry);
-    if (!canonical) {
-      return { valid: false, ips: [] };
-    }
-    canonicalIps.push(canonical);
+    if (canonical === null) return { status: "invalid" };
+    ips.add(canonical);
   }
 
-  return { valid: true, ips: canonicalIps };
+  return { status: "ok", ips: [...ips] };
 }
 
-export function isTeamMember(visitorIp: string | null | undefined, allowlist: string[]): boolean {
-  if (!visitorIp || !allowlist || allowlist.length === 0) {
-    return false;
-  }
+export function isTeamMember(visitorIp: string, allowlist: readonly string[]): boolean {
   const canonical = canonicalizeIp(visitorIp);
-  if (!canonical) return false;
-  return allowlist.includes(canonical);
+  return canonical !== null && allowlist.includes(canonical);
 }

@@ -26,6 +26,10 @@ const WRANGLER = "frontend/wrangler.jsonc";
 const DEPLOY = ".github/workflows/deploy.yml";
 const CI = ".github/workflows/ci.yml";
 const RUNBOOK = "docs/runbooks/infrastructure.md";
+const ENTRY = "frontend/worker/entry.ts";
+const STAGE_SOURCE = "frontend/src/modules/security/stage.ts";
+const VISITOR_SOURCE = "frontend/src/modules/security/visitor.ts";
+const IDENTITY_SOURCE = "frontend/src/modules/security/identity.ts";
 
 function mutate(path, edit) {
   const before = real[path];
@@ -148,6 +152,37 @@ const cases = [
   ["protected environments undocumented", RUNBOOK, replace(/required reviewers/gi, "approvers"), "documentation"],
   ["bootstrap undocumented", RUNBOOK, replace(/create_service/g, "service_flag"), "documentation"],
   ["out-of-band secrets undocumented", RUNBOOK, replace(/gcloud secrets versions add/g, "gcloud secrets add"), "documentation"],
+
+  // One explicit stage, admission before assets, and the approved edge limits
+  ["Wrangler main is not the admission entry", WRANGLER, replace('"main": "worker/entry.ts"', '"main": "vinext/server/fetch-handler"'), "stage-admission"],
+  ["assets are served before the Worker runs", WRANGLER, replace('"run_worker_first": true', '"run_worker_first": false'), "stage-admission"],
+  ["run_worker_first omitted", WRANGLER, replace(/,\n\s*\/\/ Without this[\s\S]*?"run_worker_first": true/, ""), "stage-admission"],
+  ["dev stage variable missing", WRANGLER, replace('"PORTFOLIO_STAGE": "dev"', '"OTHER": "dev"'), "stage-admission"],
+  ["prod names the wrong stage", WRANGLER, replace('"PORTFOLIO_STAGE": "prod"', '"PORTFOLIO_STAGE": "dev"'), "stage-admission"],
+  ["stage variable has a non-canonical value", WRANGLER, replace('"PORTFOLIO_STAGE": "dev"', '"PORTFOLIO_STAGE": "development"'), "stage-admission"],
+  ["extra plaintext variable in a stage", WRANGLER, replace('"PORTFOLIO_STAGE": "dev"', '"PORTFOLIO_STAGE": "dev",\n        "PORTFOLIO_BACKEND_URL": "https://x"'), "stage-admission"],
+  ["ordinary IP limit raised", WRANGLER, replace('"namespace_id": "1101", "simple": { "limit": 5,', '"namespace_id": "1101", "simple": { "limit": 50,'), "edge-limits"],
+  ["team IP limit lowered", WRANGLER, replace('"namespace_id": "1202", "simple": { "limit": 15,', '"namespace_id": "1202", "simple": { "limit": 3,'), "edge-limits"],
+  ["country limit lowered", WRANGLER, replace('"namespace_id": "1103", "simple": { "limit": 100,', '"namespace_id": "1103", "simple": { "limit": 10,'), "edge-limits"],
+  ["rate-limit period changed", WRANGLER, replace('"namespace_id": "1201", "simple": { "limit": 5, "period": 60 }', '"namespace_id": "1201", "simple": { "limit": 5, "period": 10 }'), "edge-limits"],
+  ["country binding removed from prod", WRANGLER, replace(/\n\s*\{ "name": "RATE_LIMIT_COUNTRY", "namespace_id": "1203"[^\n]*/, ""), "edge-limits"],
+  ["rate-limit bindings removed from dev", WRANGLER, replace(/,\n\s*"ratelimits": \[\n(?:\s*\{ "name": "RATE_LIMIT[^\n]*\n){3}\s*\]\n(\s*\},\n\s*"prod")/, "\n$1"), "edge-limits"],
+  ["stages share rate-limit namespaces", WRANGLER, replace('"namespace_id": "1201"', '"namespace_id": "1101"'), "edge-limits"],
+  ["entry dispatches without admitting", ENTRY, replace(/const decision = await admitRequest\(request, env as AdmissionEnv\);\s*if \(decision\.action === "respond"\) return decision\.response;\s*return handler\.fetch\(decision\.request, env, ctx\);/, "return handler.fetch(request, env, ctx);"), "stage-admission"],
+  ["entry admits after dispatching", ENTRY, replace(/const decision = await admitRequest\(request, env as AdmissionEnv\);\s*if \(decision\.action === "respond"\) return decision\.response;\s*return handler\.fetch\(decision\.request, env, ctx\);/, "const response = await handler.fetch(request, env, ctx);\n    await admitRequest(request, env as AdmissionEnv);\n    return response;"), "stage-admission"],
+  ["stage inferred from NODE_ENV", STAGE_SOURCE, append("export const inferred = process.env.NODE_ENV === \"production\" ? \"prod\" : \"dev\";"), "stage-admission"],
+  ["stage inferred from an alternative variable", IDENTITY_SOURCE, append("export const alt = process.env.NEXT_PUBLIC_APP_STAGE;"), "stage-admission"],
+  ["visitor read from X-Forwarded-For", VISITOR_SOURCE, append("export const fallback = (request: Request) => request.headers.get(\"x-forwarded-for\");"), "trusted-metadata"],
+  ["visitor read from True-Client-IP", IDENTITY_SOURCE, append("export const tci = \"True-Client-IP\";"), "trusted-metadata"],
+  ["backend stage not passed by Terraform", GCP_MAIN, replace('name  = "Portfolio__Stage"', 'name  = "Portfolio_Stage"'), "stage-admission"],
+  ["backend stage hard-coded in Terraform", GCP_MAIN, replace(/(name {2}= "Portfolio__Stage"\n\s+value = )var\.environment/, '$1"prod"'), "stage-admission"],
+  ["deploy skips the generated Worker check", DEPLOY, replace('node ../tools/check-wrangler-build.mjs "${TARGET}"', "true"), "stage-admission"],
+  ["deploy does not require the allowlist secret", DEPLOY, replace('"ASSISTANT_PROXY_IDENTITY_SECRET", "TEAM_ALLOWLIST"', '"ASSISTANT_PROXY_IDENTITY_SECRET"'), "stage-admission"],
+  ["allowlist passed to the deploy as a variable", DEPLOY, replace('--var "PORTFOLIO_BACKEND_URL:${BACKEND_URL}"', '--var "PORTFOLIO_BACKEND_URL:${BACKEND_URL}" --var TEAM_ALLOWLIST:x'), "secret-state"],
+  ["runbook omits the backend stage", RUNBOOK, replace(/Portfolio__Stage/g, "BackendStage"), "documentation"],
+  ["runbook omits the allowlist secret", RUNBOOK, replace(/TEAM_ALLOWLIST/g, "ALLOWED_IPS"), "documentation"],
+  ["runbook overstates the edge limits", RUNBOOK, replace(/approximate/gi, "exact"), "documentation"],
+  ["runbook omits admission before assets", RUNBOOK, replace(/run_worker_first/g, "assets_first"), "documentation"],
 ];
 
 for (const [name, path, edit, id] of cases) {
@@ -160,6 +195,11 @@ for (const [name, path, edit, id] of cases) {
     );
   });
 }
+
+test("detects: application middleware returning", () => {
+  const violations = checkDeployment({ ...real, "frontend/src/middleware.ts": "" });
+  assert.ok(violations.some((violation) => violation.startsWith("[stage-admission]")), JSON.stringify(violations));
+});
 
 test("every case names a distinct, non-empty mutation", () => {
   const names = cases.map(([name]) => name);

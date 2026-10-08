@@ -29,6 +29,8 @@ dotnet run --project src/Hosts/Web/Rafael.Portfolio.Web
 
 The backend exposes `/health`, `/v1/profile`, `/v1/projects`, and OpenAPI during development.
 
+The frontend never infers its stage: it reads one explicit server-side value, `PORTFOLIO_STAGE`, and fails closed without it. For workstation development set `PORTFOLIO_STAGE=local` (for example in the ignored `frontend/.env.local`); deployed Workers get `dev` or `prod` from `frontend/wrangler.jsonc`. The backend defaults to `local` only in its Development and Test environments. See [the infrastructure runbook](docs/runbooks/infrastructure.md#stage-access-and-edge-limits).
+
 ## Verification
 
 ```bash

@@ -1,26 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  captureFetch,
+  expectNoCallerIdentity,
+  expectSignedIdentity,
+  PROXY_SECRET,
+} from "@/modules/security/proxy-test-support";
 import { POST } from "./route";
 
-async function hmacSha256Hex(secret: string, message: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
-  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
+function jobRequest(headers: Record<string, string> = {}) {
+  return new Request("http://localhost/api/jobs/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({ vacancyText: "Looking for an Autonomous Agents architect." }),
+  });
 }
 
-function captureFetch() {
-  const calls: { url: string; init: RequestInit }[] = [];
-  vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
-    calls.push({ url: String(url), init });
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
-  }));
-  return calls;
+function configure(env: Record<string, string>) {
+  for (const [name, value] of Object.entries({ PORTFOLIO_STAGE: "prod", ASSISTANT_PROXY_IDENTITY_SECRET: PROXY_SECRET, ...env })) {
+    vi.stubEnv(name, value);
+  }
 }
 
 describe("job matching proxy route", () => {
@@ -29,68 +27,75 @@ describe("job matching proxy route", () => {
     vi.unstubAllGlobals();
   });
 
-  it("signs the edge visitor identity and forwards request to backend", async () => {
-    vi.stubEnv("ASSISTANT_PROXY_IDENTITY_SECRET", "proxy-test-secret");
+  it("signs the platform visitor identity for the job endpoint", async () => {
+    configure({});
     const calls = captureFetch();
 
-    const request = new Request("http://localhost/api/jobs/analyze", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "CF-Connecting-IP": "203.0.113.12",
-      },
-      body: JSON.stringify({ vacancyText: "Looking for an Autonomous Agents architect." }),
-    });
-
-    const response = await POST(request);
+    const response = await jobRequestResponse({ "CF-Connecting-IP": "203.0.113.12", "CF-IPCountry": "MX" });
     expect(response.status).toBe(200);
 
-    const headers = calls[0].init.headers as Record<string, string>;
-    expect(headers["X-Client-Key"]).toBe("v1:203.0.113.12:XX:ordinary:prod");
-    expect(headers["X-Client-Key-Proof"]).toBe(
-      await hmacSha256Hex("proxy-test-secret", "v1:203.0.113.12:XX:ordinary:prod")
-    );
-    expect(headers["CF-Connecting-IP"]).toBeUndefined();
+    expect(calls[0].url).toMatch(/\/v1\/jobs\/analyze$/);
+    expect(await expectSignedIdentity(calls[0])).toEqual({
+      kind: "visitor",
+      ip: "203.0.113.12",
+      country: "MX",
+      tier: "ordinary",
+      stage: "prod",
+      method: "POST",
+      path: "/v1/jobs/analyze",
+    });
+    expectNoCallerIdentity(calls[0]);
   });
 
-  it("returns 503 in production when the proxy secret is missing", async () => {
-    vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("ASSISTANT_PROXY_IDENTITY_SECRET", "");
+  it("returns 503 when the stage is not configured", async () => {
+    configure({ PORTFOLIO_STAGE: "" });
     const calls = captureFetch();
 
-    const request = new Request("http://localhost/api/jobs/analyze", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "CF-Connecting-IP": "203.0.113.12",
-      },
-      body: JSON.stringify({ vacancyText: "Looking for an Autonomous Agents architect." }),
-    });
+    const response = await jobRequestResponse({ "CF-Connecting-IP": "203.0.113.12" });
 
-    const response = await POST(request);
     expect(response.status).toBe(503);
-    const payload = (await response.json()) as { error?: string };
-    expect(payload.error).toContain("not configured");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns 503 when the proxy secret is missing", async () => {
+    configure({ ASSISTANT_PROXY_IDENTITY_SECRET: "" });
+    const calls = captureFetch();
+
+    const response = await jobRequestResponse({ "CF-Connecting-IP": "203.0.113.12" });
+
+    expect(response.status).toBe(503);
+    expect(((await response.json()) as { error?: string }).error).toContain("not configured");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a request whose platform IP is missing, ignoring forwarding headers", async () => {
+    configure({});
+    const calls = captureFetch();
+
+    const response = await jobRequestResponse({ "X-Forwarded-For": "198.51.100.7" });
+
+    expect(response.status).toBe(403);
     expect(calls).toHaveLength(0);
   });
 
   it("forwards backend error status and Retry-After header", async () => {
-    vi.stubEnv("ASSISTANT_PROXY_IDENTITY_SECRET", "proxy-test-secret");
-    vi.stubGlobal("fetch", vi.fn(async () => {
-      return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
-        status: 429,
-        headers: { "Retry-After": "60", "Content-Type": "application/json" },
-      });
-    }));
+    configure({});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+          status: 429,
+          headers: { "Retry-After": "60", "Content-Type": "application/json" },
+        });
+      })
+    );
 
-    const request = new Request("http://localhost/api/jobs/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.12" },
-      body: JSON.stringify({ vacancyText: "Looking for an Autonomous Agents architect." }),
-    });
-
-    const response = await POST(request);
+    const response = await jobRequestResponse({ "CF-Connecting-IP": "203.0.113.12" });
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("60");
   });
 });
+
+function jobRequestResponse(headers: Record<string, string>) {
+  return POST(jobRequest(headers));
+}

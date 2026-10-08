@@ -16,16 +16,34 @@ Each piece has exactly one owner, so infrastructure maintenance cannot undo a re
 | Cloud Run service shape: scaling, limits, ingress, runtime environment, secret references, IAM | Terraform | Created in bootstrap stage 3 (`create_service`). |
 | Cloud Run **image** and deploy metadata | Deploy workflow | Terraform ignores exactly `template[0].containers[0].image`, `client`, `client_version`, and the deploy labels. |
 | Frontend Worker **code** and plaintext variable `PORTFOLIO_BACKEND_URL` | Deploy workflow (`wrangler deploy`) | Not in Terraform, so an apply cannot replace released code. |
-| Frontend Worker **secret** `ASSISTANT_PROXY_IDENTITY_SECRET` | Owner, out of band | `wrangler secret put` on the exact Worker. Deploys never touch secrets. |
+| Frontend Worker **secrets** `ASSISTANT_PROXY_IDENTITY_SECRET` and `TEAM_ALLOWLIST` | Owner, out of band | `wrangler secret put` on the exact Worker; `TEAM_ALLOWLIST` is separate for `dev` and `prod`. Deploys never touch secrets. |
+| Frontend Worker stage `PORTFOLIO_STAGE`, rate-limit bindings, admission entry | `frontend/wrangler.jsonc` | Per Wrangler environment, baked into the build by `CLOUDFLARE_ENV` and checked offline. |
+| Backend stage `Portfolio__Stage` | Terraform | Set from `environment` (`dev` or `prod`) on the Cloud Run service. |
 | Zone DNS record and Worker route | Terraform (`deployment/cloudflare`) | Off until `enable_custom_domain`. |
 | Turnstile widget | Owner, in the Cloudflare console | The provider would store the widget secret in state, so Terraform does not manage it. |
 | Contact (Cloudflare Email) credentials | Deferred | Contact is disabled; no credential is provisioned or read until a separate, owner-authorized activation. |
 
 ## Runtime safety of remote deployments
 
-The backend on Cloud Run always runs with `ASPNETCORE_ENVIRONMENT=Production`. In that mode the host requires the signed proxy identity (`X-Client-Key` / `X-Client-Key-Proof`) for the assistant, job matching, and contact endpoints, requires a Turnstile secret, and refuses to start without both secrets. `Development`, which accepts requests without a signed identity and bypasses Turnstile, remains a local-only mode and is never set by Terraform.
+The backend on Cloud Run always runs with `ASPNETCORE_ENVIRONMENT=Production`. In that mode the host requires the signed visitor identity (`X-Portfolio-Identity` / `X-Portfolio-Identity-Proof`, see [Stage access and edge limits](#stage-access-and-edge-limits)) for the assistant, job matching, and contact endpoints, requires a Turnstile secret, and refuses to start without both secrets. `Development`, which accepts requests without a signed identity and bypasses Turnstile, remains a local-only mode and is never set by Terraform.
 
-The deployment stage (`dev`, `staging`, `prod`) is a separate input, `environment`. It names and labels resources and chooses which branch the cloud identity trusts. It never selects the ASP.NET environment, so a "dev" deployment is exactly as strict as production.
+The deployment stage (`dev`, `staging`, `prod`) is a separate input, `environment`. It names and labels resources and chooses which branch the cloud identity trusts. It never selects the ASP.NET environment, so a "dev" deployment is exactly as strict as production. The backend serves only `dev` and `prod`; its stage is passed explicitly (see below).
+
+## Stage access and edge limits
+
+**One explicit stage.** The stage is a single server-side value that no request can influence and nothing infers from `NODE_ENV`, the hostname, or the ASP.NET environment. The Worker reads `PORTFOLIO_STAGE`, declared per Wrangler environment in `frontend/wrangler.jsonc` and baked into the build by `CLOUDFLARE_ENV`; the backend reads `Portfolio__Stage`, which Terraform sets from `environment`. Only `dev` and `prod` are deployed stages (`local` exists for workstation tooling and is refused by a deployed host). A missing or invalid stage fails closed: the Worker answers 503 and the backend refuses to start. `tools/check-wrangler-build.mjs` verifies the generated Worker configuration for each stage and the deploy workflow runs it before uploading.
+
+**`dev` is private.** The Worker entry (`frontend/worker/entry.ts`) admits every request before Vinext serves anything, and `assets.run_worker_first` is `true` so static assets, cached responses, HTML, RSC payloads, optimised images and API routes all require an allowlisted visitor. Only the exact `GET` or `HEAD /health` stays public: the Worker answers it with `{"status":"ok"}` and the backend's `/health` is likewise content-free. The dev Cloud Run service has a public URL, so the backend also closes every other route, including OpenAPI, to callers without a signed identity: a team-tier visitor identity, or the Worker's short-lived service read (`GET` only, bound to its path, valid for five minutes) that the server-rendered pages use to load public data.
+
+**Allowlist secret.** `TEAM_ALLOWLIST` is a Worker secret, separate for `dev` and `prod`, set with `wrangler secret put TEAM_ALLOWLIST --name rafael-portfolio-frontend-<stage>`. It is a JSON array of at most 64 exact IP strings, for example `["203.0.113.4","2001:db8::1"]`. Malformed entries, CIDR ranges, ports, wildcards, comma lists and non-strings invalidate the whole value; equivalent IPv6 spellings and an IPv4-mapped IPv6 address normalise to one canonical form. `dev` fails closed (503) when the value is missing, invalid or empty. In `prod` the list only gives its addresses the team limits: team access never bypasses Turnstile, input validation, the separate Contact limit or any other safety control. The value is never printed, logged or passed as a variable; the deploy job checks only that a secret with that name exists.
+
+**Platform metadata only.** The visitor is the address in `CF-Connecting-IP` and the country from the runtime's `request.cf.country`, both asserted by Cloudflare. `X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `True-Client-IP` and any caller-supplied tier, country or identity header are ignored, and a missing or invalid platform address is refused rather than replaced by another header. (These values are trustworthy because every request reaches the Worker through Cloudflare, on `workers.dev` and on the zone route alike.)
+
+**Signed identity, version 2.** The Worker sends the backend `X-Portfolio-Identity`, the base64url of a JSON document with exactly `v`, `kind`, `ip`, `country`, `tier`, `stage`, `method` and `path`, and `X-Portfolio-Identity-Proof`, the lowercase hex HMAC-SHA256 over `portfolio-identity-v2\n` plus the identity header exactly as sent. The backend checks the proof in constant time before parsing, then validates a canonical IP, a two-character country, the tier, and that the stage, method and path match its own and the request. An identity therefore cannot be replayed against another stage or endpoint. The format and shared test vectors are in `docs/contracts/visitor-identity-v2.json`, which the frontend and backend suites both check.
+
+**Edge limits.** Before dispatching to the backend, the Worker applies Cloudflare Workers Rate Limiting bindings to the shared assistant chat and job analysis quota (`/api/assistant/chat/stream`, `/api/jobs/analyze`): an ordinary address 5 per minute, an allowlisted team address 15 per minute, and 100 per minute per country, with team traffic still counting toward its country. A request refused for its own address does not spend country capacity. Refusals are 429 with `Retry-After: 60`; a missing or failing binding fails closed with 503. These counters are **approximate**: Cloudflare keeps them per location and updates them eventually, so a visitor reaching several locations, or a burst, can exceed the stated numbers briefly, and they are not a global quota. The backend keeps its own independent in-memory limits with the same numbers (per instance, with a bounded table), and Contact has its separate backend limit of 3 per 10 minutes.
+
+**Rollout order.** A backend image that includes this change refuses to start without `Portfolio__Stage`, and the deploy job refuses a Worker without `TEAM_ALLOWLIST`. For an existing stage: set `TEAM_ALLOWLIST` on its Worker, apply `deployment/gcp` for the stage so the service carries `Portfolio__Stage` (a Terraform apply creates a new revision; it never replaces the deploy-owned image), and only then run the deploy workflow. The frontend and backend must be deployed together, because the version 1 colon-delimited identity is no longer accepted by the backend.
 
 ## Secrets and the data-handling policy
 
@@ -90,7 +108,7 @@ After a deploy, `terraform plan` should show no change to the image or deploy me
 
 ## Cloudflare Worker and route (staged)
 
-1. **Widget and secret first.** Create the Turnstile widget in the console (above) and create the Worker secret. `wrangler secret put ... --name rafael-portfolio-frontend-<stage>` creates the Worker as a draft if it does not exist.
+1. **Widget and secrets first.** Create the Turnstile widget in the console (above) and create the Worker secrets `ASSISTANT_PROXY_IDENTITY_SECRET` and `TEAM_ALLOWLIST` for that stage (`dev` needs a valid, non-empty allowlist before it will serve anyone). `wrangler secret put ... --name rafael-portfolio-frontend-<stage>` creates the Worker as a draft if it does not exist.
 2. **Deploy.** Run the deploy workflow. The frontend job builds with `CLOUDFLARE_ENV=<stage>`, which fixes the Worker name `rafael-portfolio-frontend-<stage>` in the generated config (a mismatched `--env` at deploy time is refused by Wrangler), requires the secret to exist on that exact Worker, then runs `wrangler deploy --env <stage> --var PORTFOLIO_BACKEND_URL:<url>`.
 3. **Route.** Only after the Worker exists, apply `deployment/cloudflare` with `enable_custom_domain = true` and the zone ID. It creates the stage hostname record (`dev.<domain>` for dev, the apex for prod) and the route to the same Worker name.
 
@@ -195,6 +213,7 @@ done
 - [ ] Bootstrap stage 1 applied; outputs recorded.
 - [ ] Shared proxy identity secret added to Secret Manager **and** to the target Worker with `wrangler secret put`.
 - [ ] Turnstile widget created in the console; secret key in Secret Manager; site key in the GitHub variable.
+- [ ] `TEAM_ALLOWLIST` set on each Worker (JSON array of at most 64 exact IPs; non-empty for `dev`), separately for `dev` and `prod`.
 - [ ] Secret versions verified with `gcloud secrets versions list`; initial image pushed (immutable tag).
 - [ ] Service-phase inputs saved in the stage's ignored variable file, then bootstrap stage 3 applied with that file (`create_service = true`).
 - [ ] GitHub `dev` and `prod` environments created with required reviewers, deployment branches, variables, and `CLOUDFLARE_API_TOKEN`.

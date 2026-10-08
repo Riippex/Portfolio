@@ -27,7 +27,7 @@ deployment/
     └── terraform.tfvars.example   # Example variables template (never commit real credentials)
 ```
 
-Outside this directory: `frontend/wrangler.jsonc` (per-stage Worker names), `.github/workflows/` (CI and the gated manual deploy), and `tools/check-deployment.mjs` with `tools/check-wrangler-build.mjs` (offline regression checks).
+Outside this directory: `frontend/wrangler.jsonc` (per-stage Worker names, the explicit `PORTFOLIO_STAGE`, and the edge rate-limit bindings; see the runbook's *Stage access and edge limits*), `.github/workflows/` (CI and the gated manual deploy), and `tools/check-deployment.mjs` with `tools/check-wrangler-build.mjs` (offline regression checks).
 
 ## Ownership
 

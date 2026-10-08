@@ -184,4 +184,200 @@ public sealed class AssistantRateLimiterTests
         var otherCountryClient = limiter.TryAcquire("client-other", isTeamTier: false, countryCode: "MX", out _);
         Assert.True(otherCountryClient);
     }
+
+    [Fact]
+    public void Team_traffic_counts_toward_the_country_limit()
+    {
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, teamLimit: 15, countryLimit: 10, window: TimeSpan.FromSeconds(60));
+
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.True(limiter.TryAcquire("team-1", isTeamTier: true, countryCode: "CO", out _));
+            Assert.True(limiter.TryAcquire("team-2", isTeamTier: true, countryCode: "CO", out _));
+        }
+
+        Assert.False(limiter.TryAcquire("team-3", isTeamTier: true, countryCode: "CO", out var retry));
+        Assert.True(retry > TimeSpan.Zero);
+        Assert.False(limiter.TryAcquire("ordinary", isTeamTier: false, countryCode: "CO", out _));
+        Assert.True(limiter.TryAcquire("team-3", isTeamTier: true, countryCode: "MX", out _));
+    }
+
+    [Fact]
+    public void Country_codes_are_normalized_so_spellings_share_one_aggregate()
+    {
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, countryLimit: 2, window: TimeSpan.FromSeconds(60));
+
+        Assert.True(limiter.TryAcquire("a", false, "co", out _));
+        Assert.True(limiter.TryAcquire("b", false, " CO ", out _));
+        Assert.False(limiter.TryAcquire("c", false, "Co", out _));
+    }
+
+    [Fact]
+    public void Chat_and_job_calls_share_one_visitor_quota()
+    {
+        // Both endpoints call the same limiter with the same visitor key.
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, window: TimeSpan.FromSeconds(60));
+
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.True(limiter.TryAcquire("shared-visitor", false, "CO", out _));
+        }
+
+        for (var i = 0; i < 2; i++)
+        {
+            Assert.True(limiter.TryAcquire("shared-visitor", false, "CO", out _));
+        }
+
+        Assert.False(limiter.TryAcquire("shared-visitor", false, "CO", out _));
+    }
+
+    [Fact]
+    public void A_new_visitor_is_refused_at_capacity_even_when_its_country_key_already_exists()
+    {
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, window: TimeSpan.FromSeconds(60), maxTrackedKeys: 4);
+
+        // visitor-1, visitor-2, visitor-3 and country:CO fill the table.
+        for (var i = 1; i <= 3; i++)
+        {
+            Assert.True(limiter.TryAcquire($"visitor-{i}", false, "CO", out _));
+        }
+
+        Assert.Equal(4, limiter.TrackedClientCount);
+
+        Assert.False(limiter.TryAcquire("visitor-4", false, "CO", out var retry));
+        Assert.True(retry > TimeSpan.Zero);
+        Assert.Equal(4, limiter.TrackedClientCount);
+
+        // Known visitors keep working.
+        Assert.True(limiter.TryAcquire("visitor-1", false, "CO", out _));
+    }
+
+    [Fact]
+    public void A_visitor_with_a_new_country_needs_room_for_both_keys()
+    {
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, window: TimeSpan.FromSeconds(60), maxTrackedKeys: 3);
+
+        Assert.True(limiter.TryAcquire("visitor-1", false, "CO", out _));
+        Assert.Equal(2, limiter.TrackedClientCount);
+
+        // Two missing keys do not fit in the one free slot, so nothing is inserted.
+        Assert.False(limiter.TryAcquire("visitor-2", false, "MX", out _));
+        Assert.Equal(2, limiter.TrackedClientCount);
+
+        Assert.True(limiter.TryAcquire("visitor-2", false, "CO", out _));
+        Assert.Equal(3, limiter.TrackedClientCount);
+    }
+
+    [Fact]
+    public void Refused_traffic_never_grows_the_table_past_capacity()
+    {
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, window: TimeSpan.FromSeconds(60), maxTrackedKeys: 50);
+
+        for (var i = 0; i < 5_000; i++)
+        {
+            limiter.TryAcquire($"rotated-{i}", false, i % 2 == 0 ? "CO" : "MX", out _);
+            Assert.True(limiter.TrackedClientCount <= 50, $"Tracked {limiter.TrackedClientCount} keys after {i + 1} requests.");
+        }
+    }
+
+    [Fact]
+    public void A_visitor_refused_only_for_its_country_leaves_no_key_behind()
+    {
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, countryLimit: 2, window: TimeSpan.FromSeconds(60));
+
+        Assert.True(limiter.TryAcquire("visitor-1", false, "CO", out _));
+        Assert.True(limiter.TryAcquire("visitor-2", false, "CO", out _));
+        Assert.Equal(3, limiter.TrackedClientCount);
+
+        for (var i = 3; i < 500; i++)
+        {
+            Assert.False(limiter.TryAcquire($"visitor-{i}", false, "CO", out _));
+        }
+
+        Assert.Equal(3, limiter.TrackedClientCount);
+    }
+
+    [Fact]
+    public void Capacity_is_reclaimed_once_entries_expire()
+    {
+        var time = new FakeTimeProvider();
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, window: TimeSpan.FromSeconds(60), timeProvider: time, maxTrackedKeys: 3);
+
+        Assert.True(limiter.TryAcquire("visitor-1", false, "CO", out _));
+        Assert.True(limiter.TryAcquire("visitor-2", false, "CO", out _));
+        Assert.False(limiter.TryAcquire("visitor-3", false, "CO", out _));
+
+        time.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.True(limiter.TryAcquire("visitor-3", false, "CO", out _));
+        Assert.True(limiter.TryAcquire("visitor-4", false, "CO", out _));
+        Assert.True(limiter.TrackedClientCount <= 3);
+    }
+
+    [Fact]
+    public async Task Concurrent_admissions_never_exceed_the_capacity_bound()
+    {
+        const int capacity = 40;
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, window: TimeSpan.FromSeconds(60), maxTrackedKeys: capacity);
+        var highWater = 0;
+        using var stop = new CancellationTokenSource();
+
+        var monitor = Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                var observed = limiter.TrackedClientCount;
+                int current;
+                while (observed > (current = Volatile.Read(ref highWater)))
+                {
+                    Interlocked.CompareExchange(ref highWater, observed, current);
+                }
+            }
+        });
+
+        var admitted = 0;
+        var workers = Enumerable.Range(0, 16).Select(worker => Task.Run(() =>
+        {
+            for (var i = 0; i < 400; i++)
+            {
+                // Every worker uses its own new visitors, but they all share two countries.
+                if (limiter.TryAcquire($"visitor-{worker}-{i}", false, i % 2 == 0 ? "CO" : "MX", out _))
+                {
+                    Interlocked.Increment(ref admitted);
+                }
+            }
+        })).ToArray();
+
+        await Task.WhenAll(workers);
+        await stop.CancelAsync();
+        await monitor;
+
+        Assert.True(Volatile.Read(ref highWater) <= capacity, $"Observed {highWater} tracked keys with capacity {capacity}.");
+        Assert.True(limiter.TrackedClientCount <= capacity);
+        // Two country keys plus at most capacity - 2 visitors can ever have been admitted.
+        Assert.True(admitted <= capacity - 2, $"Admitted {admitted} new visitors with capacity {capacity}.");
+        Assert.True(admitted > 0);
+    }
+
+    [Fact]
+    public async Task Concurrent_requests_cannot_exceed_a_visitor_or_country_limit()
+    {
+        var limiter = new InMemorySlidingWindowRateLimiter(limit: 5, teamLimit: 15, countryLimit: 20, window: TimeSpan.FromSeconds(60));
+        var admitted = 0;
+
+        var workers = Enumerable.Range(0, 16).Select(worker => Task.Run(() =>
+        {
+            for (var i = 0; i < 100; i++)
+            {
+                if (limiter.TryAcquire($"visitor-{worker % 8}", isTeamTier: worker % 2 == 0, "CO", out _))
+                {
+                    Interlocked.Increment(ref admitted);
+                }
+            }
+        })).ToArray();
+
+        await Task.WhenAll(workers);
+
+        Assert.Equal(20, admitted);
+    }
 }

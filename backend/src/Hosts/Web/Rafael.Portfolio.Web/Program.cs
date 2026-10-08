@@ -10,6 +10,7 @@ using Rafael.Portfolio.Modules.Portfolio.Application;
 using Rafael.Portfolio.Modules.Portfolio.Infrastructure;
 using Rafael.Portfolio.Web.Adapters;
 using Rafael.Portfolio.Web.Endpoints;
+using Rafael.Portfolio.Web.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -31,6 +32,8 @@ builder.Services.AddSingleton<IAssistantRateLimiter>(_ => new InMemorySlidingWin
     countryLimit: 100));
 builder.Services.AddSingleton<IModelControlLedger, InMemoryModelControlLedger>();
 
+// The stage is explicit (Portfolio:Stage) and validated at startup, never inferred.
+var portfolioStage = PortfolioStages.Resolve(builder.Configuration, builder.Environment);
 var turnstileSecret = builder.Configuration["Turnstile:SecretKey"];
 var proxyIdentitySecret = builder.Configuration["AssistantSecurity:ProxyIdentitySecret"];
 var turnstileBypassAllowed = builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Test");
@@ -42,10 +45,11 @@ if (string.IsNullOrWhiteSpace(turnstileSecret) && !turnstileBypassAllowed)
         "Human verification fails closed rather than running unprotected.");
 }
 
-if (string.IsNullOrWhiteSpace(proxyIdentitySecret) && !turnstileBypassAllowed)
+if (string.IsNullOrWhiteSpace(proxyIdentitySecret) && (!turnstileBypassAllowed || portfolioStage != PortfolioStage.Local))
 {
     throw new InvalidOperationException(
-        "AssistantSecurity:ProxyIdentitySecret must be configured outside Development/Test environments. " +
+        "AssistantSecurity:ProxyIdentitySecret must be configured outside Development/Test environments " +
+        "and whenever Portfolio:Stage is dev or prod. " +
         "Per-visitor rate limiting requires the signed proxy identity boundary.");
 }
 
@@ -81,7 +85,12 @@ builder.Services.AddSingleton<IContactService, ContactService>();
 
 builder.Services.AddHealthChecks();
 
+builder.Services.AddSingleton(TimeProvider.System);
+
 var app = builder.Build();
+
+// Private dev: every route except the exact /health needs a signed identity. No-op elsewhere.
+app.UseMiddleware<PrivateDevAccessMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {

@@ -154,7 +154,8 @@ jobs:
         run: npm ci
 
       # The build receives only public values. CLOUDFLARE_ENV selects the Wrangler
-      # environment, which fixes the Worker name for this stage in the generated config.
+      # environment, which fixes the Worker name, the explicit PORTFOLIO_STAGE and the
+      # rate-limit bindings for this stage in the generated config.
       - name: Build Vinext bundle for the target stage
         working-directory: frontend
         run: npm run build:vinext
@@ -163,10 +164,20 @@ jobs:
           PORTFOLIO_BACKEND_URL: ${{ vars.PORTFOLIO_BACKEND_URL }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
 
-      # The Worker signs visitor identity with a secret that must equal the backend's. It is
-      # set out of band on the exact Worker being deployed; this step only checks that a
-      # secret with the right name exists (names are listed, values never are).
-      - name: Require the proxy identity secret on the target Worker
+      # The generated Worker configuration must carry this stage's explicit PORTFOLIO_STAGE,
+      # the rate-limit bindings, and the admission entry. Offline; reads the build output only.
+      - name: Verify the generated Worker configuration
+        working-directory: frontend
+        env:
+          TARGET: ${{ inputs.environment }}
+        run: node ../tools/check-wrangler-build.mjs "${TARGET}"
+
+      # The Worker signs visitor identity with a secret that must equal the backend's, and
+      # admits visitors from a per-environment allowlist (TEAM_ALLOWLIST: a JSON array of at
+      # most 64 exact IPs). Both are set out of band on the exact Worker being deployed; this
+      # step only checks that secrets with the right names exist (names are listed, values
+      # never are). dev fails closed at runtime without a valid non-empty allowlist.
+      - name: Require the Worker secrets on the target Worker
         working-directory: frontend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -177,9 +188,11 @@ jobs:
           npx wrangler secret list --name "${WORKER}" --format json > "${RUNNER_TEMP}/worker-secrets.json"
           node -e '
             const names = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).map((s) => s.name);
-            if (!names.includes("ASSISTANT_PROXY_IDENTITY_SECRET")) {
-              console.error("::error::Worker " + process.argv[2] + " has no ASSISTANT_PROXY_IDENTITY_SECRET. Set it with wrangler secret put before deploying.");
-              process.exit(1);
+            for (const required of ["ASSISTANT_PROXY_IDENTITY_SECRET", "TEAM_ALLOWLIST"]) {
+              if (!names.includes(required)) {
+                console.error("::error::Worker " + process.argv[2] + " has no " + required + ". Set it with wrangler secret put before deploying.");
+                process.exit(1);
+              }
             }
           ' "${RUNNER_TEMP}/worker-secrets.json" "${WORKER}"
 

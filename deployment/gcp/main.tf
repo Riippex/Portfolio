@@ -141,6 +141,14 @@ resource "google_cloud_run_v2_service" "backend" {
         value = "http://+:${var.backend_port}"
       }
 
+      # The backend stage is explicit and never inferred from the ASP.NET environment, which
+      # is always Production here. It must equal the stage inside every signed identity, and
+      # dev additionally closes every route except /health to callers without one.
+      env {
+        name  = "Portfolio__Stage"
+        value = var.environment
+      }
+
       env {
         name  = "Contact__Enabled"
         value = "false"
@@ -189,6 +197,11 @@ resource "google_cloud_run_v2_service" "backend" {
     precondition {
       condition     = var.container_image != ""
       error_message = "create_service requires container_image: push an image to Artifact Registry first and pass its immutable reference."
+    }
+
+    precondition {
+      condition     = contains(["dev", "prod"], var.environment)
+      error_message = "The backend serves only the dev and prod stages (Portfolio__Stage); it refuses to start for any other stage name."
     }
   }
 

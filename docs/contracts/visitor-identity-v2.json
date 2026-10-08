@@ -1,0 +1,359 @@
+{
+  "description": "Contract vectors for the signed visitor identity and exact-IP canonicalization. The frontend (src/modules/security) and the backend (SignedIdentity.cs, IpCanonicalizer.cs) both test against this file. The secret is a test value, not a deployed secret.",
+  "headers": {
+    "identity": "X-Portfolio-Identity",
+    "proof": "X-Portfolio-Identity-Proof"
+  },
+  "proofDomain": "portfolio-identity-v2\n",
+  "secret": "contract-vector-secret-not-a-real-secret",
+  "ip": {
+    "canonical": [
+      {
+        "input": "203.0.113.9",
+        "canonical": "203.0.113.9"
+      },
+      {
+        "input": "0.0.0.0",
+        "canonical": "0.0.0.0"
+      },
+      {
+        "input": "255.255.255.255",
+        "canonical": "255.255.255.255"
+      },
+      {
+        "input": "2001:db8::1",
+        "canonical": "2001:db8::1"
+      },
+      {
+        "input": "2001:0DB8:0000:0000:0000:0000:0000:0001",
+        "canonical": "2001:db8::1"
+      },
+      {
+        "input": "2001:DB8::0001",
+        "canonical": "2001:db8::1"
+      },
+      {
+        "input": "2001:db8:0:0:1:0:0:1",
+        "canonical": "2001:db8::1:0:0:1"
+      },
+      {
+        "input": "2001:db8:0:1:1:1:1:1",
+        "canonical": "2001:db8:0:1:1:1:1:1"
+      },
+      {
+        "input": "::",
+        "canonical": "::"
+      },
+      {
+        "input": "::1",
+        "canonical": "::1"
+      },
+      {
+        "input": "0:0:0:0:0:0:0:1",
+        "canonical": "::1"
+      },
+      {
+        "input": "1::",
+        "canonical": "1::"
+      },
+      {
+        "input": "1:0:0:0:0:0:0:0",
+        "canonical": "1::"
+      },
+      {
+        "input": "fe80::1",
+        "canonical": "fe80::1"
+      },
+      {
+        "input": "1:2:3:4:5:6:7:8",
+        "canonical": "1:2:3:4:5:6:7:8"
+      },
+      {
+        "input": "1:2:3:4:5:6:7::",
+        "canonical": "1:2:3:4:5:6:7:0"
+      },
+      {
+        "input": "1:2:3:4:5:6:1.2.3.4",
+        "canonical": "1:2:3:4:5:6:102:304"
+      },
+      {
+        "input": "64:ff9b::192.0.2.33",
+        "canonical": "64:ff9b::c000:221"
+      },
+      {
+        "input": "::ffff:203.0.113.9",
+        "canonical": "203.0.113.9"
+      },
+      {
+        "input": "::FFFF:cb00:7109",
+        "canonical": "203.0.113.9"
+      },
+      {
+        "input": "0:0:0:0:0:ffff:203.0.113.9",
+        "canonical": "203.0.113.9"
+      }
+    ],
+    "invalid": [
+      "",
+      " ",
+      " 203.0.113.9",
+      "203.0.113.9 ",
+      "203.0.113",
+      "203.0.113.9.1",
+      "256.1.1.1",
+      "01.2.3.4",
+      "1.2.3.04",
+      "203.0.113.9:443",
+      "203.0.113.0/24",
+      "203.0.113.*",
+      "[::1]",
+      "[::1]:443",
+      "::1%eth0",
+      "::1/128",
+      "1:2:3:4:5:6:7",
+      "1:2:3:4:5:6:7:8:9",
+      ":::",
+      "1::2::3",
+      "12345::1",
+      "g::1",
+      "::ffff:1.2.3",
+      "1.2.3.4::",
+      "0x7f.0.0.1",
+      "2130706433",
+      "1,2,3,4",
+      "::1.2.3.4.5",
+      ":1:2:3:4:5:6:7",
+      "1:2:3:4:5:6:7:",
+      "::1:2:3:4:5:6:7:8",
+      "1:2::3:4:5:6:7:8",
+      "1:2:3:4:5:6:7:8::",
+      "::1.2.3.4:5",
+      "localhost",
+      "unknown"
+    ]
+  },
+  "identity": {
+    "valid": [
+      {
+        "name": "ordinary IPv4 visitor",
+        "claims": {
+          "v": 2,
+          "kind": "visitor",
+          "ip": "203.0.113.9",
+          "country": "CO",
+          "tier": "ordinary",
+          "stage": "prod",
+          "method": "POST",
+          "path": "/v1/assistant/chat/stream"
+        },
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "9e5418c6615c4302cfb6b1b33dc7bbe170a894e2f83fc685333a36b426f8eb86"
+      },
+      {
+        "name": "team IPv6 visitor",
+        "claims": {
+          "v": 2,
+          "kind": "visitor",
+          "ip": "2001:db8::1",
+          "country": "US",
+          "tier": "team",
+          "stage": "dev",
+          "method": "POST",
+          "path": "/v1/jobs/analyze"
+        },
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAwMTpkYjg6OjEiLCJjb3VudHJ5IjoiVVMiLCJ0aWVyIjoidGVhbSIsInN0YWdlIjoiZGV2IiwibWV0aG9kIjoiUE9TVCIsInBhdGgiOiIvdjEvam9icy9hbmFseXplIn0",
+        "proof": "77bc102fa0df5141bfa37826f64984fd84906c41f59c06f680a9a144a67ee8e2"
+      },
+      {
+        "name": "unknown country",
+        "claims": {
+          "v": 2,
+          "kind": "visitor",
+          "ip": "203.0.113.9",
+          "country": "XX",
+          "tier": "ordinary",
+          "stage": "prod",
+          "method": "POST",
+          "path": "/v1/contact"
+        },
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiWFgiLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9jb250YWN0In0",
+        "proof": "4af60d4675dcec535b32d30e36b1db47257284dd249c1e5ba794b2c2853e1e9c"
+      },
+      {
+        "name": "tor pseudo country",
+        "claims": {
+          "v": 2,
+          "kind": "visitor",
+          "ip": "203.0.113.9",
+          "country": "T1",
+          "tier": "ordinary",
+          "stage": "prod",
+          "method": "POST",
+          "path": "/v1/assistant/chat/stream"
+        },
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiVDEiLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "72f7e03d4befe80d44520bdcac1b5c988f43d1def5411445ff22541803e8fc18"
+      },
+      {
+        "name": "service read",
+        "claims": {
+          "v": 2,
+          "kind": "service-read",
+          "stage": "dev",
+          "method": "GET",
+          "path": "/v1/profile",
+          "iat": 1790000000
+        },
+        "identity": "eyJ2IjoyLCJraW5kIjoic2VydmljZS1yZWFkIiwic3RhZ2UiOiJkZXYiLCJtZXRob2QiOiJHRVQiLCJwYXRoIjoiL3YxL3Byb2ZpbGUiLCJpYXQiOjE3OTAwMDAwMDB9",
+        "proof": "219141f40b72f20ff07564e480e7d8fad2529297236d1cd6826c9f7fdb853c63"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "wrong version",
+        "identity": "eyJ2IjoxLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "eaefea8dfcfd739f4630b4625d51565e192658d8bd44d6f6b5a3e06094bae02e"
+      },
+      {
+        "name": "extra claim",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0iLCJleHRyYSI6dHJ1ZX0",
+        "proof": "958e5b20d7eb9efff7dca939f97f9b9e10c40ee4619642858add008a9d4b0096"
+      },
+      {
+        "name": "missing claim",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "7c6e53e244a4e0f116a3351b2829ec272cc40d5ba26f3f3d86f00ed6556cdd80"
+      },
+      {
+        "name": "unknown kind",
+        "identity": "eyJ2IjoyLCJraW5kIjoiYWRtaW4iLCJpcCI6IjIwMy4wLjExMy45IiwiY291bnRyeSI6IkNPIiwidGllciI6Im9yZGluYXJ5Iiwic3RhZ2UiOiJwcm9kIiwibWV0aG9kIjoiUE9TVCIsInBhdGgiOiIvdjEvYXNzaXN0YW50L2NoYXQvc3RyZWFtIn0",
+        "proof": "b8bac7408e7af466e0a24caeb07735ffc961bda7d57bae219b784294e14bb91b"
+      },
+      {
+        "name": "non canonical uppercase IPv6",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAwMTpEQjg6OjEiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "79ad61d18740c37c2fec0d5245c58bdd6173c55d4721896699ff56411db6df9f"
+      },
+      {
+        "name": "non canonical expanded IPv6",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAwMTpkYjg6MDowOjA6MDowOjEiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "5d4962a232a2af7185d41b78ebce286d1bb15d7d38abb7764fbc1c42d3df1877"
+      },
+      {
+        "name": "IPv4 mapped IPv6 is not canonical",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiOjpmZmZmOjIwMy4wLjExMy45IiwiY291bnRyeSI6IkNPIiwidGllciI6Im9yZGluYXJ5Iiwic3RhZ2UiOiJwcm9kIiwibWV0aG9kIjoiUE9TVCIsInBhdGgiOiIvdjEvYXNzaXN0YW50L2NoYXQvc3RyZWFtIn0",
+        "proof": "6575c47efe8f0050af311a1cfb3d4822c011328898e7f5c804329d811b2e03aa"
+      },
+      {
+        "name": "leading zero IPv4",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjA5IiwiY291bnRyeSI6IkNPIiwidGllciI6Im9yZGluYXJ5Iiwic3RhZ2UiOiJwcm9kIiwibWV0aG9kIjoiUE9TVCIsInBhdGgiOiIvdjEvYXNzaXN0YW50L2NoYXQvc3RyZWFtIn0",
+        "proof": "0238e03be99d3b7c1336487a5548bbeff4b1bfadba1af8cef542e49ceaac01c0"
+      },
+      {
+        "name": "IP with port",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjk6NDQzIiwiY291bnRyeSI6IkNPIiwidGllciI6Im9yZGluYXJ5Iiwic3RhZ2UiOiJwcm9kIiwibWV0aG9kIjoiUE9TVCIsInBhdGgiOiIvdjEvYXNzaXN0YW50L2NoYXQvc3RyZWFtIn0",
+        "proof": "c6f4b296cf096264ca6748c9d4781dd2561cbd40a458e768ba5b98a9bd3ffd6a"
+      },
+      {
+        "name": "IP is a number",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjozNDA1ODAzNzg1LCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "528a39d5c79abc397db20e61467e6237eefad8d920d66c73e8ee2841ed194fa7"
+      },
+      {
+        "name": "lowercase country",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiY28iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "2b8069323dc94e603257aacc9f44a5272398ae21b3126ab8a6eed34750466448"
+      },
+      {
+        "name": "three letter country",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ09MIiwidGllciI6Im9yZGluYXJ5Iiwic3RhZ2UiOiJwcm9kIiwibWV0aG9kIjoiUE9TVCIsInBhdGgiOiIvdjEvYXNzaXN0YW50L2NoYXQvc3RyZWFtIn0",
+        "proof": "413e92b8b2bc2857b0a24704fd1450251fec3143956a8c0aa3a2ff5616b5d2e3"
+      },
+      {
+        "name": "numeric country",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiMTIiLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "7a041f079ae321a1120affde5363293a821a37406b54407b30c6718104513191"
+      },
+      {
+        "name": "unknown tier",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoiYWRtaW4iLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "a06e110ab35d4018d771e72bc577fed56a38b53987a4f27386b15f0920f41c24"
+      },
+      {
+        "name": "uppercase tier",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoiVGVhbSIsInN0YWdlIjoicHJvZCIsIm1ldGhvZCI6IlBPU1QiLCJwYXRoIjoiL3YxL2Fzc2lzdGFudC9jaGF0L3N0cmVhbSJ9",
+        "proof": "1e032262e0ad42e75600247c3c72cfb9860908e039e01dd69ec61f275aedbfab"
+      },
+      {
+        "name": "unknown stage",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InN0YWdpbmciLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "cb4ae2e8756c6d5614d332ca5c585339c6111fe07f647fc9f11e72337811eb67"
+      },
+      {
+        "name": "uppercase stage",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6IlBST0QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "0f50174e64cb47fa10114efed21a6f33fc63c83356cb523d1e58f8e4dba35ad4"
+      },
+      {
+        "name": "lowercase method",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJwb3N0IiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ",
+        "proof": "e33edba1ac9b97b31d7d35b0ec898fe9b54b41646e3f8f3d11ea21d3bb67e7d7"
+      },
+      {
+        "name": "relative path",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6InYxL2NvbnRhY3QifQ",
+        "proof": "c6ed35a8e1798d972353aed92df6b86d86f27b84173cd632e0237a1fe3f544d6"
+      },
+      {
+        "name": "path with whitespace",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9jb24gdGFjdCJ9",
+        "proof": "87e130723bb348800ef2df6703e6991eabc62fb595c30332ed3c97b7840c702f"
+      },
+      {
+        "name": "service read with POST",
+        "identity": "eyJ2IjoyLCJraW5kIjoic2VydmljZS1yZWFkIiwic3RhZ2UiOiJkZXYiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9wcm9maWxlIiwiaWF0IjoxNzkwMDAwMDAwfQ",
+        "proof": "53da1214f545f5891b8378ced85fc23c929c8bc78244979043190b5cd4a8c92e"
+      },
+      {
+        "name": "service read with string iat",
+        "identity": "eyJ2IjoyLCJraW5kIjoic2VydmljZS1yZWFkIiwic3RhZ2UiOiJkZXYiLCJtZXRob2QiOiJHRVQiLCJwYXRoIjoiL3YxL3Byb2ZpbGUiLCJpYXQiOiIxNzkwMDAwMDAwIn0",
+        "proof": "1496c2e27bee858512c3ed1b857b05cd730a5d64142ad4e04428fb92e2b40665"
+      },
+      {
+        "name": "service read with fractional iat",
+        "identity": "eyJ2IjoyLCJraW5kIjoic2VydmljZS1yZWFkIiwic3RhZ2UiOiJkZXYiLCJtZXRob2QiOiJHRVQiLCJwYXRoIjoiL3YxL3Byb2ZpbGUiLCJpYXQiOjE3OTAwMDAwMDAuNX0",
+        "proof": "614afabeaea5b519045b04341d452102c964b232d73c90a614c745bcdf358bd7"
+      },
+      {
+        "name": "service read with ip claim",
+        "identity": "eyJ2IjoyLCJraW5kIjoic2VydmljZS1yZWFkIiwic3RhZ2UiOiJkZXYiLCJtZXRob2QiOiJHRVQiLCJwYXRoIjoiL3YxL3Byb2ZpbGUiLCJpYXQiOjE3OTAwMDAwMDAsImlwIjoiMjAzLjAuMTEzLjkifQ",
+        "proof": "8db07ed163d04b57d194c0432db424a209eac3d4fe1c72404d743fe0c5ee378d"
+      },
+      {
+        "name": "JSON array",
+        "identity": "WzIsInZpc2l0b3IiXQ",
+        "proof": "5bde64de2d91a07350fd5ae3c27701527024b831c60bf68b8fa0a02a726af3e6"
+      },
+      {
+        "name": "JSON null",
+        "identity": "bnVsbA",
+        "proof": "d339c19205cb8e1e399f4f63b7e5cb873bdf76e21caeb9f8f8e1672ec5a1176c"
+      },
+      {
+        "name": "not JSON",
+        "identity": "djE6MjAzLjAuMTEzLjk6Q086b3JkaW5hcnk6cHJvZA",
+        "proof": "022052ef7644b994b68e390fa711821e1afdf656e02cfd4d860f4d7d2530557b"
+      },
+      {
+        "name": "not base64url",
+        "identity": "not base64url!",
+        "proof": "1cc07e7b5239272341579a51a2ea6c3f6644f1609e98139798fbd1bf096d672e"
+      },
+      {
+        "name": "padded base64",
+        "identity": "eyJ2IjoyLCJraW5kIjoidmlzaXRvciIsImlwIjoiMjAzLjAuMTEzLjkiLCJjb3VudHJ5IjoiQ08iLCJ0aWVyIjoib3JkaW5hcnkiLCJzdGFnZSI6InByb2QiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii92MS9hc3Npc3RhbnQvY2hhdC9zdHJlYW0ifQ==",
+        "proof": "8ad3e2ff4be0f527b802b7be095819f0233d41f7cea879661db6ca2a6c7a0077"
+      }
+    ]
+  }
+}

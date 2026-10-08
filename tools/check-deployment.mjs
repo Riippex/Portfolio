@@ -25,6 +25,11 @@ export const CHECKED_FILES = [
   "deployment/cloudflare/versions.tf",
   "deployment/cloudflare/terraform.tfvars.example",
   "frontend/wrangler.jsonc",
+  "frontend/worker/entry.ts",
+  "frontend/src/modules/security/admission.ts",
+  "frontend/src/modules/security/identity.ts",
+  "frontend/src/modules/security/stage.ts",
+  "frontend/src/modules/security/visitor.ts",
   ".github/workflows/ci.yml",
   ".github/workflows/deploy.yml",
   "docs/runbooks/infrastructure.md",
@@ -66,6 +71,12 @@ function stripHcl(text) {
     .split("\n")
     .filter((line) => !/^\s*(#|\/\/)/.test(line))
     .join("\n");
+}
+
+// Removes // and /* */ comments from TypeScript source so documentation can name what the code
+// must never do. Good enough for the small security modules this reads (no URLs in strings).
+function stripJs(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 function stripYaml(text) {
@@ -588,6 +599,79 @@ export function checkDeployment(files) {
     if (!needle.test(runbook)) fail("documentation", `docs/runbooks/infrastructure.md must document ${why}`);
   }
 
+  // 10. One explicit stage, admission before assets, and the approved edge limits -------
+  const entrySource = stripJs(need("frontend/worker/entry.ts"));
+  const securitySources = [
+    "frontend/src/modules/security/admission.ts",
+    "frontend/src/modules/security/identity.ts",
+    "frontend/src/modules/security/stage.ts",
+    "frontend/src/modules/security/visitor.ts",
+  ].map((path) => [path, stripJs(need(path))]);
+
+  if (wrangler.main !== "worker/entry.ts") {
+    fail("stage-admission", `Wrangler main must be the admission entry worker/entry.ts, found ${JSON.stringify(wrangler.main)}`);
+  }
+  if (wrangler.assets?.run_worker_first !== true) {
+    fail("stage-admission", "assets.run_worker_first must be true so the dev allowlist covers static assets");
+  }
+  const admitAt = entrySource.search(/admitRequest\(/);
+  const dispatchAt = entrySource.search(/handler\.fetch\(/);
+  if (admitAt < 0 || dispatchAt < 0 || admitAt > dispatchAt) {
+    fail("stage-admission", "the Worker entry must admit the request before handing it to the application");
+  }
+  if (typeof files["frontend/src/middleware.ts"] === "string") {
+    fail("stage-admission", "frontend/src/middleware.ts must not exist: admission lives in the Worker entry, not in application middleware");
+  }
+  for (const [path, source] of securitySources) {
+    if (/NODE_ENV|NEXT_PUBLIC_APP_STAGE|process\.env\.STAGE\b/.test(source)) {
+      fail("stage-admission", `${path} must not infer the stage from NODE_ENV or alternative variables`);
+    }
+    if (/x-forwarded-for|x-real-ip|true-client-ip|x-client-ip|["']forwarded["']/i.test(source)) {
+      fail("trusted-metadata", `${path} must trust platform-asserted visitor metadata only, never forwarding headers`);
+    }
+  }
+  const edgeLimits = { RATE_LIMIT_IP_ORDINARY: 5, RATE_LIMIT_IP_TEAM: 15, RATE_LIMIT_COUNTRY: 100 };
+  const namespaces = [];
+  for (const stage of wranglerEnvs) {
+    const stageConfig = wrangler.env[stage] ?? {};
+    if (JSON.stringify(stageConfig.vars ?? {}) !== JSON.stringify({ PORTFOLIO_STAGE: stage })) {
+      fail("stage-admission", `Wrangler env ${stage} must declare exactly vars.PORTFOLIO_STAGE = ${JSON.stringify(stage)}`);
+    }
+    const bindings = stageConfig.ratelimits ?? [];
+    if (JSON.stringify(bindings.map((binding) => binding.name).sort()) !== JSON.stringify(Object.keys(edgeLimits).sort())) {
+      fail("edge-limits", `Wrangler env ${stage} must declare exactly the rate-limit bindings ${Object.keys(edgeLimits)}`);
+    }
+    for (const binding of bindings) {
+      if (binding.simple?.limit !== edgeLimits[binding.name] || binding.simple?.period !== 60) {
+        fail("edge-limits", `${stage} ${binding.name} must allow ${edgeLimits[binding.name]} per 60 seconds`);
+      }
+      namespaces.push(String(binding.namespace_id));
+    }
+  }
+  if (new Set(namespaces).size !== namespaces.length) {
+    fail("edge-limits", "rate-limit namespace ids must be unique across bindings and stages");
+  }
+  if (!/name\s*=\s*"Portfolio__Stage"\s*\n\s*value\s*=\s*var\.environment\b/.test(gcp.main)) {
+    fail("stage-admission", "the Cloud Run service must receive its stage explicitly as Portfolio__Stage from the stage variable");
+  }
+  if (!/node \.\.\/tools\/check-wrangler-build\.mjs "\$\{TARGET\}"/.test(frontendJob)) {
+    fail("stage-admission", "the frontend deploy must verify the generated Worker configuration for the target stage");
+  }
+  if (!/for \(const required of \[[^\]]*"ASSISTANT_PROXY_IDENTITY_SECRET"[^\]]*"TEAM_ALLOWLIST"/.test(frontendJob)) {
+    fail("stage-admission", "the frontend deploy must require both ASSISTANT_PROXY_IDENTITY_SECRET and TEAM_ALLOWLIST on the target Worker");
+  }
+  if (/TEAM_ALLOWLIST\s*:\s*\$|--var\s+"?TEAM_ALLOWLIST/.test(deploy)) {
+    fail("secret-state", "the allowlist must never be passed as a variable");
+  }
+  for (const [needle, why] of [
+    [/Portfolio__Stage/, "the explicit backend stage"],
+    [/TEAM_ALLOWLIST/, "the per-environment allowlist secret"],
+    [/approximate/i, "that the edge rate limits are approximate"],
+    [/run_worker_first/, "admission before static assets"],
+  ]) {
+    if (!needle.test(runbook)) fail("documentation", `docs/runbooks/infrastructure.md must document ${why}`);
+  }
+
   return violations;
 }
 
@@ -603,6 +687,10 @@ export function loadRepositoryFiles(root) {
     } catch {
       // reported as a missing file by checkDeployment
     }
+  }
+  // Application middleware must not come back: admission lives in the Worker entry.
+  if (existsSync(join(root, "frontend/src/middleware.ts"))) {
+    files["frontend/src/middleware.ts"] = "";
   }
   // Anything left in the retired placeholder directory must be noticed.
   const scripts = join(root, "deployment/cloudflare/scripts");

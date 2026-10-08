@@ -9,7 +9,7 @@ using System.Text.Json;
 
 namespace Rafael.Portfolio.IntegrationTests;
 
-public sealed class PublishedBackendSmokeTests
+public sealed partial class PublishedBackendSmokeTests
 {
     // One deadline bounds the whole smoke test; every stage below draws on it.
     private static readonly TimeSpan OverallTimeout = TimeSpan.FromMinutes(8);
@@ -24,18 +24,8 @@ public sealed class PublishedBackendSmokeTests
     [Fact]
     public async Task Published_backend_serves_portfolio_endpoints_outside_the_checkout()
     {
-        var root = FindRepositoryRoot();
-        var publishDir = Path.Combine(Path.GetTempPath(), $"portfolio-publish-{Guid.NewGuid():N}");
-        using var run = new SmokeRun();
-        Exception? failure = null;
-
-        try
+        await RunPublishedAsync(async (run, publishDir) =>
         {
-            var webProject = Path.Combine(
-                root, "backend", "src", "Hosts", "Web", "Rafael.Portfolio.Web", "Rafael.Portfolio.Web.csproj");
-            run.Stage = "publish";
-            await PublishAsync(run, webProject, publishDir);
-
             run.Stage = "published artifact contents";
             var bundledManifest = Path.Combine(publishDir, "evidence", "inventory.json");
             Assert.True(File.Exists(bundledManifest), $"Published artifact is missing {bundledManifest}");
@@ -126,26 +116,18 @@ public sealed class PublishedBackendSmokeTests
             using var invalidSlugSearch = await http.GetAsync(new Uri("/v1/evidence/search?q=agents&slug=Invalid_Slug!!", UriKind.Relative));
             Assert.Equal(HttpStatusCode.BadRequest, invalidSlugSearch.StatusCode);
 
-            // Signed identity helpers for the assistant proxy boundary.
-            string Proof(string clientKey)
-            {
-                var bytes = HMACSHA256.HashData(
-                    Encoding.UTF8.GetBytes("integration-proxy-secret"),
-                    Encoding.UTF8.GetBytes(clientKey));
-                return Convert.ToHexString(bytes).ToLowerInvariant();
-            }
-
-            HttpRequestMessage ChatRequest(string? clientKey = null, string? proof = null)
+            // Signed identity helpers for the assistant proxy boundary (version 2 identity).
+            HttpRequestMessage ChatRequest(string? identity = null, string? proof = null)
             {
                 var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/assistant/chat", UriKind.Relative));
-                if (clientKey is not null)
+                if (identity is not null)
                 {
-                    request.Headers.TryAddWithoutValidation("X-Client-Key", clientKey);
+                    request.Headers.TryAddWithoutValidation("X-Portfolio-Identity", identity);
                 }
 
                 if (proof is not null)
                 {
-                    request.Headers.TryAddWithoutValidation("X-Client-Key-Proof", proof);
+                    request.Headers.TryAddWithoutValidation("X-Portfolio-Identity-Proof", proof);
                 }
 
                 request.Content = new StringContent(
@@ -159,23 +141,31 @@ public sealed class PublishedBackendSmokeTests
 
             // Identity rejections happen before rate limiting, so they hold on a
             // fresh, unexhausted bucket regardless of call order.
-            using (var forged = ChatRequest("visitor-198.51.100.99", ComputeWrongProof("visitor-198.51.100.99")))
+            var forgedIdentity = SignVisitor("POST", "/v1/assistant/chat", "198.51.100.99", "local", secret: "a-different-secret");
+            using (var forged = ChatRequest(forgedIdentity.Identity, forgedIdentity.Proof))
             using (var forgedResponse = await http.SendAsync(forged))
             {
                 Assert.Equal(HttpStatusCode.Forbidden, forgedResponse.StatusCode);
             }
 
-            using (var incomplete = ChatRequest("visitor-198.51.100.98"))
+            using (var incomplete = ChatRequest(SignVisitor("POST", "/v1/assistant/chat", "198.51.100.98", "local").Identity))
             using (var incompleteResponse = await http.SendAsync(incomplete))
             {
                 Assert.Equal(HttpStatusCode.Forbidden, incompleteResponse.StatusCode);
             }
 
-            var oversizedVisitor = new string('a', 129);
-            using (var oversized = ChatRequest(oversizedVisitor, Proof(oversizedVisitor)))
+            var oversizedIdentity = new string('a', 1025);
+            using (var oversized = ChatRequest(oversizedIdentity, ProofFor(oversizedIdentity)))
             using (var oversizedResponse = await http.SendAsync(oversized))
             {
                 Assert.Equal(HttpStatusCode.Forbidden, oversizedResponse.StatusCode);
+            }
+
+            var wrongStageIdentity = SignVisitor("POST", "/v1/assistant/chat", "198.51.100.96", "prod");
+            using (var wrongStage = ChatRequest(wrongStageIdentity.Identity, wrongStageIdentity.Proof))
+            using (var wrongStageResponse = await http.SendAsync(wrongStage))
+            {
+                Assert.Equal(HttpStatusCode.Forbidden, wrongStageResponse.StatusCode);
             }
 
             using var chatPendingEvidence = await http.PostAsync(
@@ -283,32 +273,32 @@ public sealed class PublishedBackendSmokeTests
 
             // The signed proxy boundary gives each visitor an isolated 10-request
             // budget across the frontend-to-backend path.
-            const string visitorKey = "visitor-203.0.113.10";
+            var visitorIdentity = SignVisitor("POST", "/v1/assistant/chat", "203.0.113.10", "local");
             for (var attempt = 1; attempt <= 10; attempt++)
             {
-                using var signedRequest = ChatRequest(visitorKey, Proof(visitorKey));
+                using var signedRequest = ChatRequest(visitorIdentity.Identity, visitorIdentity.Proof);
                 using var signedResponse = await http.SendAsync(signedRequest);
                 Assert.Equal(HttpStatusCode.OK, signedResponse.StatusCode);
             }
 
-            using (var overLimitRequest = ChatRequest(visitorKey, Proof(visitorKey)))
+            using (var overLimitRequest = ChatRequest(visitorIdentity.Identity, visitorIdentity.Proof))
             using (var overLimitResponse = await http.SendAsync(overLimitRequest))
             {
                 Assert.Equal(HttpStatusCode.TooManyRequests, overLimitResponse.StatusCode);
             }
 
             run.Stage = "development job analysis requests";
-            const string jobsVisitorKey = "visitor-jobs-integration";
+            var jobsIdentity = SignVisitor("POST", "/v1/jobs/analyze", "203.0.113.11", "local");
             HttpRequestMessage JobRequest(string vacancyText, string? clientKey = null, string? proof = null)
             {
                 var req = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/jobs/analyze", UriKind.Relative));
                 if (clientKey is not null)
                 {
-                    req.Headers.TryAddWithoutValidation("X-Client-Key", clientKey);
+                    req.Headers.TryAddWithoutValidation("X-Portfolio-Identity", clientKey);
                 }
                 if (proof is not null)
                 {
-                    req.Headers.TryAddWithoutValidation("X-Client-Key-Proof", proof);
+                    req.Headers.TryAddWithoutValidation("X-Portfolio-Identity-Proof", proof);
                 }
                 req.Content = new StringContent(
                     JsonSerializer.Serialize(new { vacancyText }),
@@ -319,8 +309,8 @@ public sealed class PublishedBackendSmokeTests
 
             using (var jobValid = JobRequest(
                 "Senior AI Engineer\n- Autonomous Agents architecture\n- Mainframe COBOL legacy ops",
-                jobsVisitorKey,
-                Proof(jobsVisitorKey)))
+                jobsIdentity.Identity,
+                jobsIdentity.Proof))
             using (var jobValidResponse = await http.SendAsync(jobValid))
             {
                 Assert.Equal(HttpStatusCode.OK, jobValidResponse.StatusCode);
@@ -349,31 +339,31 @@ public sealed class PublishedBackendSmokeTests
                 Assert.Contains("omitted", assessment);
             }
 
-            using (var jobEmpty = JobRequest("", jobsVisitorKey, Proof(jobsVisitorKey)))
+            using (var jobEmpty = JobRequest("", jobsIdentity.Identity, jobsIdentity.Proof))
             using (var jobEmptyResponse = await http.SendAsync(jobEmpty))
             {
                 Assert.Equal(HttpStatusCode.BadRequest, jobEmptyResponse.StatusCode);
             }
 
             var oversizedVacancy = new string('x', 5001);
-            using (var jobOversized = JobRequest(oversizedVacancy, jobsVisitorKey, Proof(jobsVisitorKey)))
+            using (var jobOversized = JobRequest(oversizedVacancy, jobsIdentity.Identity, jobsIdentity.Proof))
             using (var jobOversizedResponse = await http.SendAsync(jobOversized))
             {
                 Assert.Equal(HttpStatusCode.BadRequest, jobOversizedResponse.StatusCode);
             }
 
             run.Stage = "development contact requests";
-            const string contactVisitorKey = "visitor-contact-integration";
+            var contactIdentity = SignVisitor("POST", "/v1/contact", "203.0.113.12", "local");
             HttpRequestMessage ContactRequest(object payload, string? clientKey = null, string? proof = null)
             {
                 var req = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/contact", UriKind.Relative));
                 if (clientKey is not null)
                 {
-                    req.Headers.TryAddWithoutValidation("X-Client-Key", clientKey);
+                    req.Headers.TryAddWithoutValidation("X-Portfolio-Identity", clientKey);
                 }
                 if (proof is not null)
                 {
-                    req.Headers.TryAddWithoutValidation("X-Client-Key-Proof", proof);
+                    req.Headers.TryAddWithoutValidation("X-Portfolio-Identity-Proof", proof);
                 }
                 req.Content = new StringContent(
                     JsonSerializer.Serialize(payload),
@@ -384,8 +374,8 @@ public sealed class PublishedBackendSmokeTests
 
             using (var contactDisabled = ContactRequest(
                 new { name = "Visitor", email = "visitor@example.com", message = "Hello from integration smoke test", consent = true },
-                contactVisitorKey,
-                Proof(contactVisitorKey)))
+                contactIdentity.Identity,
+                contactIdentity.Proof))
             using (var contactDisabledResponse = await http.SendAsync(contactDisabled))
             {
                 Assert.Equal(HttpStatusCode.ServiceUnavailable, contactDisabledResponse.StatusCode);
@@ -396,14 +386,14 @@ public sealed class PublishedBackendSmokeTests
             var oversizedContactMsg = new string('a', 65 * 1024);
             using (var contactOversized = ContactRequest(
                 new { name = "Visitor", email = "visitor@example.com", message = oversizedContactMsg, consent = true },
-                contactVisitorKey,
-                Proof(contactVisitorKey)))
+                contactIdentity.Identity,
+                contactIdentity.Proof))
             using (var contactOversizedResponse = await http.SendAsync(contactOversized))
             {
                 Assert.Equal(HttpStatusCode.RequestEntityTooLarge, contactOversizedResponse.StatusCode);
             }
 
-            using (var contactEmpty = ContactRequest(new { }, contactVisitorKey, Proof(contactVisitorKey)))
+            using (var contactEmpty = ContactRequest(new { }, contactIdentity.Identity, contactIdentity.Proof))
             using (var contactEmptyResponse = await http.SendAsync(contactEmpty))
             {
                 Assert.Equal(HttpStatusCode.BadRequest, contactEmptyResponse.StatusCode);
@@ -416,6 +406,7 @@ public sealed class PublishedBackendSmokeTests
             var productionAppHost = StartHost(run, "production host", publishDir, productionPort, new Dictionary<string, string>
             {
                 ["ASPNETCORE_ENVIRONMENT"] = "Production",
+                ["Portfolio__Stage"] = "prod",
                 ["Turnstile__SecretKey"] = "0x4AAAAAA_test_secret",
                 ["AssistantSecurity__ProxyIdentitySecret"] = "integration-proxy-secret"
             });
@@ -454,11 +445,13 @@ public sealed class PublishedBackendSmokeTests
                 Assert.Equal(HttpStatusCode.Forbidden, unsignedContactResponse.StatusCode);
             }
 
-            using (var forged = ChatRequest("visitor-198.51.100.97", ComputeWrongProof("visitor-198.51.100.97")))
+            var productionForged = SignVisitor("POST", "/v1/assistant/chat", "198.51.100.97", "prod", secret: "a-different-secret");
+            using (var forged = ChatRequest(productionForged.Identity, productionForged.Proof))
             using (var forgedResponse = await productionHttp.SendAsync(forged))
             {
                 Assert.Equal(HttpStatusCode.Forbidden, forgedResponse.StatusCode);
             }
+
 
             // Production without the Turnstile secret must fail startup instead of
             // running unprotected.
@@ -466,6 +459,7 @@ public sealed class PublishedBackendSmokeTests
             var turnstileProbeError = await ExpectStartupFailureAsync(run, "Turnstile startup probe", publishDir, new Dictionary<string, string>
             {
                 ["ASPNETCORE_ENVIRONMENT"] = "Production",
+                ["Portfolio__Stage"] = "prod",
                 ["Turnstile__SecretKey"] = "",
                 ["AssistantSecurity__ProxyIdentitySecret"] = "integration-proxy-secret"
             });
@@ -475,6 +469,7 @@ public sealed class PublishedBackendSmokeTests
             var proxyProbeError = await ExpectStartupFailureAsync(run, "proxy identity startup probe", publishDir, new Dictionary<string, string>
             {
                 ["ASPNETCORE_ENVIRONMENT"] = "Production",
+                ["Portfolio__Stage"] = "prod",
                 ["Turnstile__SecretKey"] = "0x4AAAAAA_test_secret",
                 ["AssistantSecurity__ProxyIdentitySecret"] = ""
             });
@@ -484,12 +479,32 @@ public sealed class PublishedBackendSmokeTests
             var contactConfigProbeError = await ExpectStartupFailureAsync(run, "Contact config probe", publishDir, new Dictionary<string, string>
             {
                 ["ASPNETCORE_ENVIRONMENT"] = "Production",
+                ["Portfolio__Stage"] = "prod",
                 ["Turnstile__SecretKey"] = "0x4AAAAAA_test_secret",
                 ["AssistantSecurity__ProxyIdentitySecret"] = "integration-proxy-secret",
                 ["Contact__Enabled"] = "true",
                 ["Contact__AccountId"] = ""
             });
             Assert.Contains("Contact:AccountId", contactConfigProbeError);
+        });
+    }
+
+    // Publishes the backend once, runs the body against the published artifact, then always
+    // stops every child process and removes the artifact, rethrowing the first failure.
+    private static async Task RunPublishedAsync(Func<SmokeRun, string, Task> body)
+    {
+        var root = FindRepositoryRoot();
+        var publishDir = Path.Combine(Path.GetTempPath(), $"portfolio-publish-{Guid.NewGuid():N}");
+        using var run = new SmokeRun();
+        Exception? failure = null;
+
+        try
+        {
+            var webProject = Path.Combine(
+                root, "backend", "src", "Hosts", "Web", "Rafael.Portfolio.Web", "Rafael.Portfolio.Web.csproj");
+            run.Stage = "publish";
+            await PublishAsync(run, webProject, publishDir);
+            await body(run, publishDir);
         }
         catch (OperationCanceledException ex)
         {
@@ -551,12 +566,47 @@ public sealed class PublishedBackendSmokeTests
         }
     }
 
-    private static string ComputeWrongProof(string clientKey)
+    private const string IntegrationSecret = "integration-proxy-secret";
+
+    private static string ProofFor(string identity, string secret = IntegrationSecret)
     {
         var bytes = HMACSHA256.HashData(
-            Encoding.UTF8.GetBytes("a-different-secret"),
-            Encoding.UTF8.GetBytes(clientKey));
+            Encoding.UTF8.GetBytes(secret),
+            Encoding.UTF8.GetBytes("portfolio-identity-v2\n" + identity));
         return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static string EncodeIdentity(object claims) =>
+        Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(claims))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
+    // Signs a version 2 visitor identity the way the Worker does.
+    private static (string Identity, string Proof) SignVisitor(
+        string method,
+        string path,
+        string ip,
+        string stage,
+        string tier = "ordinary",
+        string secret = IntegrationSecret)
+    {
+        var identity = EncodeIdentity(new { v = 2, kind = "visitor", ip, country = "CO", tier, stage, method, path });
+        return (identity, ProofFor(identity, secret));
+    }
+
+    private static (string Identity, string Proof) SignServiceRead(string path, string stage)
+    {
+        var identity = EncodeIdentity(new
+        {
+            v = 2,
+            kind = "service-read",
+            stage,
+            method = "GET",
+            path,
+            iat = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        });
+        return (identity, ProofFor(identity));
     }
 
     private static ChildProcess StartHost(

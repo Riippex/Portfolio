@@ -1,19 +1,7 @@
 import { getBackendBaseUrl } from "@/modules/portfolio/api";
+import { buildProxyIdentityHeaders } from "@/modules/security/identity";
 
 const MAX_BODY_BYTES = 64 * 1024; // 64 KiB
-
-async function hmacSha256Hex(secret: string, message: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
-  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -63,21 +51,16 @@ export async function POST(request: Request): Promise<Response> {
 
     const backendUrl = `${getBackendBaseUrl()}/v1/contact`;
 
-    // 2. Identity signing
-    const identityHeaders: Record<string, string> = {};
-    const identitySecret = process.env.ASSISTANT_PROXY_IDENTITY_SECRET;
-
-    if (!identitySecret && process.env.NODE_ENV === "production") {
-      return new Response(
-        JSON.stringify({ error: "Contact identity boundary is not configured." }),
-        { status: 503, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
-    const visitorId = request.headers.get("CF-Connecting-IP")?.trim();
-    if (identitySecret && visitorId) {
-      identityHeaders["X-Client-Key"] = visitorId;
-      identityHeaders["X-Client-Key-Proof"] = await hmacSha256Hex(identitySecret, visitorId);
+    // 2. Identity signing (stage, platform visitor and shared secret; fails closed)
+    const { headers: identityHeaders, error: identityError } = await buildProxyIdentityHeaders(request, {
+      method: "POST",
+      path: "/v1/contact",
+    });
+    if (identityError) {
+      return new Response(JSON.stringify({ error: identityError.message }), {
+        status: identityError.status,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     // 3. Dispatch to backend

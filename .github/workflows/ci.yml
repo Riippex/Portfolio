@@ -116,7 +116,7 @@ jobs:
 
       - name: Check deployment invariants
         run: |
-          node --test tools/check-deployment.test.mjs
+          node --test tools/check-deployment.test.mjs tools/check-wrangler-build.test.mjs
           node tools/check-deployment.mjs
 
       # Declared-file wiring, evidence against the canonical schema, Terraform scaling wiring,

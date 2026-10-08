@@ -1,3 +1,4 @@
+import { buildServiceReadHeaders } from "@/modules/security/identity";
 import type { Profile, ProjectClaim, ProjectDetail, SelectedProject } from "./model";
 
 export type ApiResult<T> =
@@ -8,6 +9,24 @@ export function getBackendBaseUrl(): string {
   const envUrl = process.env.PORTFOLIO_BACKEND_URL || process.env.BACKEND_API_URL;
   const baseUrl = envUrl && envUrl.trim().length > 0 ? envUrl.trim() : "http://localhost:5233";
   return baseUrl.replace(/\/+$/, "");
+}
+
+// Reads public data from the backend. The private dev stage requires a Worker-signed
+// service-read identity bound to the exact path; other stages send no identity.
+// The signed path is the decoded request path; urlPath is its encoded form on the wire.
+async function fetchBackendJson(path: string, urlPath: string = path): Promise<Response> {
+  const { headers: identityHeaders, error } = await buildServiceReadHeaders(path);
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return fetch(`${getBackendBaseUrl()}${urlPath}`, {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      ...identityHeaders,
+    },
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,14 +96,8 @@ export function isProjectDetail(value: unknown): value is ProjectDetail {
 }
 
 export async function getProfile(): Promise<ApiResult<Profile>> {
-  const url = `${getBackendBaseUrl()}/v1/profile`;
   try {
-    const res = await fetch(url, {
-      cache: "no-store",
-      headers: {
-        Accept: "application/json",
-      },
-    });
+    const res = await fetchBackendJson("/v1/profile");
 
     if (!res.ok) {
       return { ok: false, error: `Backend responded with HTTP ${res.status}` };
@@ -103,14 +116,8 @@ export async function getProfile(): Promise<ApiResult<Profile>> {
 }
 
 export async function getSelectedProjects(): Promise<ApiResult<readonly SelectedProject[]>> {
-  const url = `${getBackendBaseUrl()}/v1/projects`;
   try {
-    const res = await fetch(url, {
-      cache: "no-store",
-      headers: {
-        Accept: "application/json",
-      },
-    });
+    const res = await fetchBackendJson("/v1/projects");
 
     if (!res.ok) {
       return { ok: false, error: `Backend responded with HTTP ${res.status}` };
@@ -129,15 +136,8 @@ export async function getSelectedProjects(): Promise<ApiResult<readonly Selected
 }
 
 export async function getProjectBySlug(slug: string): Promise<ApiResult<ProjectDetail | null>> {
-  const encodedSlug = encodeURIComponent(slug);
-  const url = `${getBackendBaseUrl()}/v1/projects/${encodedSlug}`;
   try {
-    const res = await fetch(url, {
-      cache: "no-store",
-      headers: {
-        Accept: "application/json",
-      },
-    });
+    const res = await fetchBackendJson(`/v1/projects/${slug}`, `/v1/projects/${encodeURIComponent(slug)}`);
 
     if (res.status === 404) {
       return { ok: true, data: null };

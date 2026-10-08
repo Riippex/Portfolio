@@ -6,7 +6,10 @@ export async function POST(request: Request): Promise<Response> {
     const body = await request.text();
     const backendUrl = `${getBackendBaseUrl()}/v1/jobs/analyze`;
 
-    const { headers: identityHeaders, error: identityError } = await buildProxyIdentityHeaders(request);
+    const { headers: identityHeaders, error: identityError } = await buildProxyIdentityHeaders(request, {
+      method: "POST",
+      path: "/v1/jobs/analyze",
+    });
     if (identityError) {
       return new Response(JSON.stringify({ error: identityError.message }), {
         status: identityError.status,

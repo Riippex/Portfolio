@@ -6,12 +6,12 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Rafael.Portfolio.Modules.Assistant.Application;
 using Rafael.Portfolio.Modules.Assistant.Domain;
+using Rafael.Portfolio.Web.Security;
 
 namespace Rafael.Portfolio.Web.Endpoints;
 
 public static class AssistantEndpoints
 {
-    private const int MaxVisitorIdLength = 128;
     private const string FallbackKeyMaterial = "rafael-portfolio-development-rate-limit-key";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -245,97 +245,56 @@ public static class AssistantEndpoints
         HttpContext context,
         IConfiguration configuration,
         IHostEnvironment environment,
-        out ClientIdentity? identity)
+        out ClientIdentity? identity,
+        TimeProvider? timeProvider = null)
     {
         identity = null;
-        var status = ResolveIdentityStatus(context, configuration, out var visitorId, out var identitySecret);
 
-        if (status is ClientIdentityStatus.Invalid)
+        if (!PortfolioStages.TryResolve(configuration, environment, out var stage))
+        {
+            return "Deployment stage is not configured.";
+        }
+
+        var identitySecret = configuration["AssistantSecurity:ProxyIdentitySecret"];
+        var outcome = SignedIdentity.Verify(
+            context.Request,
+            identitySecret,
+            stage,
+            timeProvider ?? TimeProvider.System,
+            out var verified);
+
+        if (outcome is SignedIdentityOutcome.Invalid)
         {
             return "Client identity signature is incomplete, oversized, or invalid.";
         }
 
-        if (status is ClientIdentityStatus.ValidSigned)
+        if (outcome is SignedIdentityOutcome.Valid)
         {
-            var isV1 = visitorId!.StartsWith("v1:", StringComparison.Ordinal);
-            var visitorIp = visitorId;
-            var countryCode = "XX";
-            var isTeamTier = false;
-            string? stage = null;
-
-            if (isV1)
+            if (verified!.Kind != SignedIdentityKind.Visitor)
             {
-                var parts = visitorId.Split(':');
-                if (parts.Length >= 5)
-                {
-                    visitorIp = parts[1];
-                    countryCode = parts[2];
-                    isTeamTier = string.Equals(parts[3], "team", StringComparison.OrdinalIgnoreCase);
-                    stage = parts[4];
-                }
+                return "A signed visitor identity is required.";
             }
 
             identity = new ClientIdentity(
-                status,
-                DeriveOpaqueKey(identitySecret, $"ratelimit:{visitorIp}"),
-                visitorIp,
-                IsTeamTier: isTeamTier,
-                CountryCode: countryCode,
-                Stage: stage);
+                ClientIdentityStatus.ValidSigned,
+                DeriveOpaqueKey(identitySecret, $"ratelimit:{verified.Ip}"),
+                verified.Ip,
+                IsTeamTier: verified.Tier == VisitorTier.Team,
+                CountryCode: verified.Country,
+                Stage: PortfolioStages.ToText(verified.Stage));
             return null;
         }
 
-        if (!environment.IsDevelopment() && !environment.IsEnvironment("Test"))
+        // No identity was sent. Only a workstation (explicit local stage in a Development or
+        // Test host) may continue, with a pseudonymous connection-based key; a deployed
+        // stage always needs the signed identity.
+        if (stage != PortfolioStage.Local || (!environment.IsDevelopment() && !environment.IsEnvironment("Test")))
         {
             return "A signed client identity is required.";
         }
 
         identity = DerivePseudonymousFallback(context, configuration, identitySecret);
         return null;
-    }
-
-    private static ClientIdentityStatus ResolveIdentityStatus(
-        HttpContext context,
-        IConfiguration configuration,
-        out string? visitorId,
-        out string? identitySecret)
-    {
-        visitorId = null;
-        identitySecret = configuration["AssistantSecurity:ProxyIdentitySecret"];
-
-        var asserted = context.Request.Headers["X-Client-Key"].FirstOrDefault();
-        var proof = context.Request.Headers["X-Client-Key-Proof"].FirstOrDefault();
-
-        if (string.IsNullOrWhiteSpace(asserted) && string.IsNullOrWhiteSpace(proof))
-        {
-            return ClientIdentityStatus.Absent;
-        }
-
-        if (string.IsNullOrWhiteSpace(asserted) ||
-            string.IsNullOrWhiteSpace(proof) ||
-            string.IsNullOrWhiteSpace(identitySecret))
-        {
-            return ClientIdentityStatus.Invalid;
-        }
-
-        var candidate = asserted.Trim();
-        if (candidate.Length > MaxVisitorIdLength)
-        {
-            return ClientIdentityStatus.Invalid;
-        }
-
-        var expected = ComputeProof(identitySecret, candidate);
-        var expectedBytes = Encoding.ASCII.GetBytes(expected);
-        var providedBytes = Encoding.ASCII.GetBytes(proof.Trim());
-
-        if (expectedBytes.Length == providedBytes.Length &&
-            CryptographicOperations.FixedTimeEquals(expectedBytes, providedBytes))
-        {
-            visitorId = candidate;
-            return ClientIdentityStatus.ValidSigned;
-        }
-
-        return ClientIdentityStatus.Invalid;
     }
 
     private static ClientIdentity DerivePseudonymousFallback(
