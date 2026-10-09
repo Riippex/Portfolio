@@ -14,4 +14,8 @@
     <ProjectReference Include="..\..\..\BuildingBlocks\Rafael.Portfolio.BuildingBlocks\Rafael.Portfolio.BuildingBlocks.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Google.Cloud.Firestore" Version="4.4.0" />
+  </ItemGroup>
+
 </Project>

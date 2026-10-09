@@ -15,6 +15,24 @@ policy, and authorization boundary.
 | Sensitive ephemeral material | Raw resumes, uploads, contact text before delivery, provider request and response bodies | Validate, bound, and redact before use. Do not retain by default or include in logs, analytics, traces, events, or model memory. |
 | Secrets and credentials | Cookies, access or refresh tokens, API keys, service credentials | Keep only in approved secret or secure session stores. Never place them in application persistence, Terraform state values, URLs, logs, prompts, browser storage, or public bundles. |
 
+## Model control ledger
+
+The Assistant's model budget ledger is the one approved durable operational record for paid
+model work (see [model control](runbooks/model-control.md)).
+
+- Owner and store: the backend, in one shared Cloud Firestore database that no frontend code can
+  reach; there is no public ledger API.
+- Purpose: admit paid model calls under the approved daily, monthly and concurrency limits.
+- Visibility: backend only.
+- Content: opaque reservation ids, UTC period keys, integer micro-USD and token counts, policy,
+  tariff and model versions, states and timestamps. Never an IP address or country, prompt,
+  answer, contact data, CV text, tool payload or transcript.
+- Retention: counters and reservation metadata expire 40 days after their accounting period
+  ends. Firestore TTL deletion is asynchronous; logical expiry does not wait for it, and active
+  uncertainty is never erased early.
+- Deletion: expiry and the backend's bounded cleanup. There is no per-visitor record to delete.
+- Logs: outcome codes and counts only.
+
 ## Product defaults
 
 - Anonymous chat has no durable transcript or cross-session memory.

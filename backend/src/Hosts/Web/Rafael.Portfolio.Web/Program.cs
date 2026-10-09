@@ -30,7 +30,10 @@ builder.Services.AddSingleton<IAssistantRateLimiter>(_ => new InMemorySlidingWin
     window: TimeSpan.FromSeconds(60),
     teamLimit: 15,
     countryLimit: 100));
-builder.Services.AddSingleton<IModelControlLedger, InMemoryModelControlLedger>();
+// The control ledger is the backend-owned Firestore adapter when configured, otherwise a ledger
+// that denies all paid work. The in-memory implementation exists only in the test project.
+builder.Services.AddSingleton<IModelControlLedger>(sp =>
+    ModelControlComposition.CreateLedger(builder.Configuration, sp.GetRequiredService<TimeProvider>()));
 
 // The stage is explicit (Portfolio:Stage) and validated at startup, never inferred.
 var portfolioStage = PortfolioStages.Resolve(builder.Configuration, builder.Environment);
@@ -98,6 +101,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapHealthChecks("/health");
+
+await ModelControlComposition.InitializeStoreIfRequestedAsync(app.Services, app.Configuration);
 
 var v1 = app.MapGroup("/v1");
 v1.MapPortfolioEndpoints();

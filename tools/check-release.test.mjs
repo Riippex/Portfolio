@@ -14,12 +14,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { CHECKED_FILES, REQUIRED_SECTIONS, checkRelease, loadRepositoryFiles, redact } from "./check-release.mjs";
+import { APPROVED_PERSISTENCE, CHECKED_FILES, REQUIRED_SECTIONS, checkRelease, loadRepositoryFiles, redact } from "./check-release.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const real = loadRepositoryFiles(root);
 
 const GCP_MAIN = "deployment/gcp/main.tf";
+const ASSISTANT_CSPROJ = "backend/src/Modules/Assistant/Rafael.Portfolio.Modules.Assistant/Rafael.Portfolio.Modules.Assistant.csproj";
+const CONTROL_LEDGER_MAIN = "deployment/control-ledger/main.tf";
 const GCP_VARS = "deployment/gcp/variables.tf";
 const RUNBOOK = "docs/runbooks/release.md";
 const INVENTORY = "docs/evidence/inventory.json";
@@ -160,11 +162,29 @@ for (const [name, path, edit, prefix] of [
   ["a SQL database resource", GCP_MAIN, append('resource "google_sql_database" "db" {}'), "persistence-tripwire:"],
   ["a storage bucket resource", GCP_MAIN, append('resource "google_storage_bucket" "b" {}'), "persistence-tripwire:"],
   ["a key-value store in the edge stack", "deployment/cloudflare/main.tf", append('resource "cloudflare_workers_kv_namespace" "k" {}'), "persistence-tripwire:"],
+  ["the Firestore package in another project", WEB_CSPROJ, replace("</Project>", '  <ItemGroup><PackageReference Include="Google.Cloud.Firestore" Version="1.0.0" /></ItemGroup>\n</Project>'), "persistence-tripwire:"],
+  ["a second Firestore package in the Assistant module", ASSISTANT_CSPROJ, replace("</Project>", '  <ItemGroup><PackageReference Include="Google.Cloud.Datastore.V1" Version="1.0.0" /><PackageReference Include="MongoDB.Driver" Version="1.0.0" /></ItemGroup>\n</Project>'), "persistence-tripwire:"],
+  ["a Firestore database in a stage stack", GCP_MAIN, append('resource "google_firestore_database" "own" {}'), "persistence-tripwire:"],
+  ["a Firestore field in a stage stack", GCP_MAIN, append('resource "google_firestore_field" "own" {}'), "persistence-tripwire:"],
+  ["a Redis instance in the control ledger stack", CONTROL_LEDGER_MAIN, append('resource "google_redis_instance" "r" {}'), "persistence-tripwire:"],
+  ["a storage bucket in the control ledger stack", CONTROL_LEDGER_MAIN, append('resource "google_storage_bucket" "b" {}'), "persistence-tripwire:"],
 ]) {
   test(`persistence tripwire detects ${name}`, () => {
     assert.ok(hasPrefix(violationsOf(mutate(path, edit)), prefix));
   });
 }
+
+test("the approved model control ledger is the only persistence exception", () => {
+  assert.deepEqual(violationsOf(real).filter((violation) => violation.startsWith("persistence-tripwire:")), []);
+  assert.deepEqual(Object.keys(APPROVED_PERSISTENCE.packages), [ASSISTANT_CSPROJ]);
+  assert.deepEqual(Object.keys(APPROVED_PERSISTENCE.resources), [CONTROL_LEDGER_MAIN]);
+  assert.deepEqual(APPROVED_PERSISTENCE.packages[ASSISTANT_CSPROJ], ["Google.Cloud.Firestore"]);
+});
+
+test("the ledger exception must stay documented with its limit", () => {
+  assert.ok(hasPrefix(violationsOf(mutate(RUNBOOK, replace(/model control ledger/gi, "budget store"))), "privacy-claims:the approved model control ledger"));
+  assert.ok(hasPrefix(violationsOf(mutate(RUNBOOK, replace(/not a total invoice cap/gi, "a spending cap"))), "privacy-claims:the approved model control ledger"));
+});
 
 // ---------------------------------------------------------------------------------------
 // Runtime, disabled Contact, and the real scaling wiring

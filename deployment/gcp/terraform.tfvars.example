@@ -31,3 +31,9 @@ create_service = false
 # service established, is refused by prevent_destroy rather than removing it.
 # create_service  = true
 # container_image = "us-central1-docker.pkg.dev/my-gcp-project-id/portfolio/backend:<immutable-tag>"
+
+# Shared model control database (owned by deployment/control-ledger, never by a stage). Leave
+# empty until the owner has applied that stack; every stage must then name the SAME project and
+# database so dev and prod share one allowance.
+control_ledger_project_id  = ""
+control_ledger_database_id = ""

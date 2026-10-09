@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using Rafael.Portfolio.Modules.Assistant.Application;
 using Rafael.Portfolio.Modules.Assistant.Domain;
 using Rafael.Portfolio.Modules.Assistant.Infrastructure;
@@ -25,53 +26,125 @@ public sealed class ModelGroundedSynthesizerTests
             Citations: new List<string>())
     };
 
+    private static InMemoryModelControlLedger NewLedger(ModelControlPolicy? policy = null) =>
+        new(policy ?? ModelControlFixtures.Policy(), new FakeTimeProvider(ModelControlFixtures.Noon));
+
     [Fact]
     public void Falls_back_to_deterministic_synthesizer_when_model_provider_is_disabled()
     {
-        var disabledProvider = new DisabledModelProvider();
-        var ledger = new InMemoryModelControlLedger();
-        var fallback = new DeterministicGroundedSynthesizer();
-        var synthesizer = new ModelGroundedSynthesizer(disabledProvider, ledger, fallback);
+        var ledger = NewLedger();
+        var synthesizer = new ModelGroundedSynthesizer(new DisabledModelProvider(), ledger, new DeterministicGroundedSynthesizer());
 
         var response = synthesizer.Synthesize("Tell me about Rafael's agent experience", SampleChunks);
 
-        Assert.NotNull(response);
         Assert.NotEmpty(response.Answer);
         Assert.NotEmpty(response.Citations);
+        Assert.Equal(0, ledger.ReservationCount);
     }
 
     [Fact]
-    public void Uses_model_provider_and_commits_budget_when_available_and_reservation_granted()
+    public void Reserves_calls_once_and_settles_to_the_reported_usage()
     {
-        var mockProvider = new TestModelProvider(isAvailable: true, response: new ModelProviderResponse(
+        var provider = new TestModelProvider(isAvailable: true, response: new ModelProviderResponse(
             Success: true,
             Text: "Rafael has extensive experience designing autonomous AI agents.",
             InputTokens: 500,
             OutputTokens: 100));
-
-        var ledger = new InMemoryModelControlLedger();
-        var fallback = new DeterministicGroundedSynthesizer();
-        var synthesizer = new ModelGroundedSynthesizer(mockProvider, ledger, fallback);
+        var ledger = NewLedger();
+        var synthesizer = new ModelGroundedSynthesizer(provider, ledger, new DeterministicGroundedSynthesizer());
 
         var response = synthesizer.Synthesize("Tell me about agents", SampleChunks);
 
         Assert.Equal("Rafael has extensive experience designing autonomous AI agents.", response.Answer);
+        Assert.Equal(1, provider.CallCount);
         Assert.Equal(1, ledger.ReservationCount);
+        Assert.Equal(50 + 40, ledger.DayCharged(ModelControlFixtures.Noon));
+        Assert.Equal(0, ledger.ActivePermits);
     }
 
     [Fact]
-    public void Falls_back_when_budget_reservation_is_denied()
+    public void Falls_back_without_calling_the_provider_when_the_reservation_is_denied()
     {
-        var mockProvider = new TestModelProvider(isAvailable: true, response: new ModelProviderResponse(Success: true, Text: "AI response"));
-        var ledger = new InMemoryModelControlLedger(dailyBudgetMicroUsd: 1); // Budget 1 micro-USD (insufficient)
-        var fallback = new DeterministicGroundedSynthesizer();
-        var synthesizer = new ModelGroundedSynthesizer(mockProvider, ledger, fallback);
+        var provider = new TestModelProvider(isAvailable: true, response: new ModelProviderResponse(Success: true, Text: "AI response"));
+        var ledger = NewLedger(ModelControlFixtures.Policy(daily: 1, monthly: 1)); // a turn does not fit
+        var synthesizer = new ModelGroundedSynthesizer(provider, ledger, new DeterministicGroundedSynthesizer());
 
         var response = synthesizer.Synthesize("Tell me about agents", SampleChunks);
 
-        Assert.NotNull(response);
-        // Fallback produced an answer, model provider was not invoked
-        Assert.Equal(0, mockProvider.CallCount);
+        Assert.NotEmpty(response.Answer);
+        Assert.Equal(0, provider.CallCount);
+        Assert.Equal(0, ledger.DayCharged(ModelControlFixtures.Noon));
+    }
+
+    [Fact]
+    public void Falls_back_without_spending_when_no_control_store_is_available()
+    {
+        var provider = new TestModelProvider(isAvailable: true, response: new ModelProviderResponse(Success: true, Text: "AI response"));
+        var synthesizer = new ModelGroundedSynthesizer(provider, new UnavailableModelControlLedger(), new DeterministicGroundedSynthesizer());
+
+        var response = synthesizer.Synthesize("Tell me about agents", SampleChunks);
+
+        Assert.NotEmpty(response.Answer);
+        Assert.Equal(0, provider.CallCount);
+    }
+
+    [Fact]
+    public void Refunds_the_reservation_when_the_prompt_exceeds_the_input_allowance_before_any_call()
+    {
+        var provider = new TestModelProvider(isAvailable: true, response: new ModelProviderResponse(Success: true, Text: "AI response"));
+        var ledger = NewLedger();
+        var synthesizer = new ModelGroundedSynthesizer(provider, ledger, new DeterministicGroundedSynthesizer());
+        var huge = SampleChunks.Select(c => c with { Content = new string('x', 7_000) }).ToList();
+
+        var response = synthesizer.Synthesize("Tell me about agents", huge);
+
+        Assert.NotEmpty(response.Answer);
+        Assert.Equal(0, provider.CallCount);
+        Assert.Equal(0, ledger.DayCharged(ModelControlFixtures.Noon));
+        Assert.Equal(0, ledger.ActivePermits);
+    }
+
+    [Fact]
+    public void Keeps_the_charge_and_the_permit_when_the_provider_fails_after_dispatch()
+    {
+        var provider = new TestModelProvider(isAvailable: true, response: new ModelProviderResponse(Success: false, Text: null, ErrorMessage: "timeout"));
+        var ledger = NewLedger();
+        var synthesizer = new ModelGroundedSynthesizer(provider, ledger, new DeterministicGroundedSynthesizer());
+
+        var response = synthesizer.Synthesize("Tell me about agents", SampleChunks);
+
+        Assert.NotEmpty(response.Answer);
+        Assert.Equal(1, provider.CallCount);
+        Assert.Equal(ModelControlFixtures.WorstCase, ledger.DayCharged(ModelControlFixtures.Noon));
+        Assert.Equal(1, ledger.ActivePermits);
+    }
+
+    [Fact]
+    public void Keeps_the_charge_when_the_provider_throws_after_dispatch()
+    {
+        var provider = new TestModelProvider(isAvailable: true, response: new ModelProviderResponse(Success: true, Text: "x"), throwOnCall: true);
+        var ledger = NewLedger();
+        var synthesizer = new ModelGroundedSynthesizer(provider, ledger, new DeterministicGroundedSynthesizer());
+
+        var response = synthesizer.Synthesize("Tell me about agents", SampleChunks);
+
+        Assert.NotEmpty(response.Answer);
+        Assert.Equal(ModelControlFixtures.WorstCase, ledger.DayCharged(ModelControlFixtures.Noon));
+        Assert.Equal(ReservationState.Uncertain, ledger.Reservation(ledger.Root!.Permits.Keys.Single())!.State);
+    }
+
+    [Fact]
+    public void Does_not_use_an_answer_whose_usage_is_invalid()
+    {
+        var provider = new TestModelProvider(isAvailable: true, response: new ModelProviderResponse(
+            Success: true, Text: "unaccounted answer", InputTokens: 0, OutputTokens: 0));
+        var ledger = NewLedger();
+        var synthesizer = new ModelGroundedSynthesizer(provider, ledger, new DeterministicGroundedSynthesizer());
+
+        var response = synthesizer.Synthesize("Tell me about agents", SampleChunks);
+
+        Assert.NotEqual("unaccounted answer", response.Answer);
+        Assert.Equal(ModelControlFixtures.WorstCase, ledger.DayCharged(ModelControlFixtures.Noon));
     }
 
     private sealed class TestModelProvider : IModelProvider
@@ -80,16 +153,19 @@ public sealed class ModelGroundedSynthesizerTests
         private readonly ModelProviderResponse _response;
         public int CallCount { get; private set; }
 
-        public TestModelProvider(bool isAvailable, ModelProviderResponse response)
+        private readonly bool _throwOnCall;
+
+        public TestModelProvider(bool isAvailable, ModelProviderResponse response, bool throwOnCall = false)
         {
             IsAvailable = isAvailable;
             _response = response;
+            _throwOnCall = throwOnCall;
         }
 
         public ValueTask<ModelProviderResponse> GenerateAsync(ModelProviderRequest request, CancellationToken cancellationToken = default)
         {
             CallCount++;
-            return ValueTask.FromResult(_response);
+            return _throwOnCall ? throw new InvalidOperationException("provider failure") : ValueTask.FromResult(_response);
         }
     }
 }

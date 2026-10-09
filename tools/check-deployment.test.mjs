@@ -27,6 +27,10 @@ const DEPLOY = ".github/workflows/deploy.yml";
 const CI = ".github/workflows/ci.yml";
 const RUNBOOK = "docs/runbooks/infrastructure.md";
 const ENTRY = "frontend/worker/entry.ts";
+const LEDGER_MAIN = "deployment/control-ledger/main.tf";
+const LEDGER_VARS = "deployment/control-ledger/variables.tf";
+const LEDGER_VERSIONS = "deployment/control-ledger/versions.tf";
+const MODEL_CONTROL = "docs/runbooks/model-control.md";
 const STAGE_SOURCE = "frontend/src/modules/security/stage.ts";
 const VISITOR_SOURCE = "frontend/src/modules/security/visitor.ts";
 const IDENTITY_SOURCE = "frontend/src/modules/security/identity.ts";
@@ -183,6 +187,42 @@ const cases = [
   ["runbook omits the allowlist secret", RUNBOOK, replace(/TEAM_ALLOWLIST/g, "ALLOWED_IPS"), "documentation"],
   ["runbook overstates the edge limits", RUNBOOK, replace(/approximate/gi, "exact"), "documentation"],
   ["runbook omits admission before assets", RUNBOOK, replace(/run_worker_first/g, "assets_first"), "documentation"],
+
+  // The shared model control database
+  ["database created without activation", LEDGER_VARS, replace(/(variable "create_database"[\s\S]*?default\s*=\s*)false/, "$1true"), "model-control"],
+  ["database not gated by create_database", LEDGER_MAIN, replace("count = var.create_database ? 1 : 0\n\n  project     = var.project_id\n  name ", "count = 1\n\n  project     = var.project_id\n  name "), "model-control"],
+  ["database deletion protection dropped", LEDGER_MAIN, replace('delete_protection_state           = "DELETE_PROTECTION_ENABLED"', 'delete_protection_state           = "DELETE_PROTECTION_DISABLED"'), "model-control"],
+  ["database no longer protected in Terraform", LEDGER_MAIN, replace("prevent_destroy = true", "prevent_destroy = false"), "model-control"],
+  ["database deleted with the stack", LEDGER_MAIN, replace('deletion_policy                   = "ABANDON"', 'deletion_policy                   = "DELETE"'), "model-control"],
+  ["datastore mode database", LEDGER_MAIN, replace('type        = "FIRESTORE_NATIVE"', 'type        = "DATASTORE_MODE"'), "model-control"],
+  ["TTL lost on the reservations", LEDGER_MAIN, replace('toset(["model_control_periods", "model_control_reservations"])', 'toset(["model_control_periods"])'), "model-control"],
+  ["TTL on the wrong field", LEDGER_MAIN, replace('field      = "expiresAt"', 'field      = "createdAt"'), "model-control"],
+  ["TTL field loses its index", LEDGER_MAIN, replace("ttl_config {}", "ttl_config {}\n  index_config {}"), "model-control"],
+  ["a broad role for the runtime", LEDGER_MAIN, replace('role    = "roles/datastore.user"', 'role    = "roles/datastore.owner"'), "model-control"],
+  ["runtime access without the database condition", LEDGER_MAIN, replace(/\n  condition \{[\s\S]*?\n  \}\n/, "\n"), "model-control"],
+  ["runtime access not gated", LEDGER_MAIN, replace("for_each = var.create_database ? toset(var.runtime_service_accounts) : toset([])", "for_each = toset(var.runtime_service_accounts)"), "model-control"],
+  ["a public principal", LEDGER_MAIN, append('# allUsers\nresource "google_project_iam_member" "public" {\n  member = "allUsers"\n}'), "model-control"],
+  ["a second grant resource", LEDGER_MAIN, append('resource "google_project_iam_binding" "extra" {\n  role = "roles/datastore.user"\n}'), "model-control"],
+  ["a stage declares the database", GCP_MAIN, append('resource "google_firestore_database" "own" {}'), "model-control"],
+  ["a stage enables the Firestore API", GCP_APIS, replace('"cloudresourcemanager.googleapis.com",', '"cloudresourcemanager.googleapis.com",\n    "firestore.googleapis.com",'), "model-control"],
+  ["the stage drops the project id", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__ProjectId"  = var.control_ledger_project_id', '"Assistant__ModelControl__Firestore__ProjectId"  = "other-project"'), "model-control"],
+  ["the stage drops the database id", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id', '"Assistant__ModelControl__Firestore__DatabaseId" = "own-database"'), "model-control"],
+  ["the stage allows one half of the pair", GCP_MAIN, replace('(var.control_ledger_project_id == "") == (var.control_ledger_database_id == "")', "true"), "model-control"],
+  ["Terraform configures a tariff", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id', '"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id\n    "Assistant__ModelControl__Tariff__Version" = "t"'), "model-control"],
+  ["Terraform initializes the store", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id', '"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id\n    "Assistant__ModelControl__InitializeStore" = "true"'), "model-control"],
+  ["CI stops starting the emulator", CI, replace("gcloud emulators firestore start", "gcloud emulators other start"), "model-control"],
+  ["CI stops pointing tests at the emulator", CI, replace("FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080", "UNUSED: 1"), "model-control"],
+  ["CI drops the emulator tests", CI, replace(/Rafael\.Portfolio\.EmulatorTests\.csproj/g, "Rafael.Portfolio.Other.csproj"), "model-control"],
+  ["CI stops validating the control ledger", CI, replace("terraform -chdir=deployment/control-ledger validate", "true"), "deploy-gate"],
+  ["a credential on the control ledger provider", LEDGER_VERSIONS, replace('provider "google" {', 'provider "google" {\n  credentials = "x"'), "plan-secrets"],
+  ["a sensitive control ledger input", LEDGER_VARS, append('variable "token" {\n  type      = string\n  sensitive = true\n}'), "plan-secrets"],
+  ["a secret payload in the control ledger", LEDGER_MAIN, append('resource "google_secret_manager_secret_version" "v" {\n  secret_data = "x"\n}'), "secret-state"],
+  ["runbook forgets the invoice-cap limit", MODEL_CONTROL, replace(/not a total invoice cap/gi, "a cost gate"), "documentation"],
+  ["runbook forgets the 40-day retention", MODEL_CONTROL, replace(/40 days/g, "some time"), "documentation"],
+  ["runbook lets the emulator checks pass silently", MODEL_CONTROL, replace(/INCOMPLETE/g, "skipped"), "documentation"],
+  ["runbook forgets that unknown outcomes stay charged", MODEL_CONTROL, replace(/Uncertain/g, "Unknown"), "documentation"],
+  ["runbook forgets what is never stored", MODEL_CONTROL, replace(/IP address or country/gi, "visitor details"), "documentation"],
+  ["infrastructure runbook forgets the shared database", RUNBOOK, replace(/deployment\/control-ledger/g, "deployment/other"), "documentation"],
 ];
 
 for (const [name, path, edit, id] of cases) {

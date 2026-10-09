@@ -47,6 +47,40 @@ jobs:
       - name: Check code formatting
         run: dotnet format backend/Rafael.Portfolio.sln --verify-no-changes --no-restore
 
+  control-ledger:
+    name: Control ledger (Firestore emulator)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # The transactional tests run only against a local emulator on a throwaway project id: no
+      # Google Cloud project, credential or network service is involved. Without the emulator
+      # every test fails as INCOMPLETE, so this job can never pass by skipping.
+      - name: Start the Firestore emulator
+        run: |
+          docker run -d --name firestore-emulator -p 8080:8080 \
+            google/cloud-sdk:emulators@sha256:3797a874fae6b75aa25260b5bd40fa0397c2f1102f18ae3ac7dc887732fbe449 \
+            gcloud emulators firestore start --host-port=0.0.0.0:8080
+          for attempt in $(seq 1 60); do
+            docker logs firestore-emulator 2>&1 | grep -q "Dev App Server is now running" && break
+            sleep 2
+          done
+          docker logs firestore-emulator 2>&1 | grep -q "Dev App Server is now running"
+
+      - name: Restore dependencies
+        run: dotnet restore backend/tests/Emulator/Rafael.Portfolio.EmulatorTests/Rafael.Portfolio.EmulatorTests.csproj
+
+      - name: Run emulator-backed ledger tests (Release)
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+        run: dotnet test backend/tests/Emulator/Rafael.Portfolio.EmulatorTests/Rafael.Portfolio.EmulatorTests.csproj -c Release --no-restore
+
   frontend:
     name: Frontend (Next.js & Vinext)
     runs-on: ubuntu-latest
@@ -138,6 +172,12 @@ jobs:
           terraform -chdir=deployment/cloudflare fmt -check
           terraform -chdir=deployment/cloudflare init -backend=false
           terraform -chdir=deployment/cloudflare validate
+
+      - name: Validate control ledger definitions
+        run: |
+          terraform -chdir=deployment/control-ledger fmt -check
+          terraform -chdir=deployment/control-ledger init -backend=false
+          terraform -chdir=deployment/control-ledger validate
 
       # Offline `terraform plan` proofs with synthetic credentials and no provider network:
       # credentials never reach a saved plan, and losing the service-phase inputs fails closed.

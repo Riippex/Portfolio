@@ -26,17 +26,16 @@ public sealed class ModelGroundedSynthesizer : IAssistantSynthesizer
             return _fallbackSynthesizer.Synthesize(query, relevantChunks);
         }
 
-        var reservationId = $"res_synth_{Guid.NewGuid():N}";
-        var reservationTask = _ledger.TryReserveAsync(reservationId, maxEstimatedCostMicroUsd: 15_000, maxInputTokens: 6000, maxOutputTokens: 600, maxCalls: 2);
-        var reservation = reservationTask.IsCompletedSuccessfully
-            ? reservationTask.Result
-            : reservationTask.AsTask().GetAwaiter().GetResult();
-
+        var reservationId = $"res_{Guid.NewGuid():N}";
+        var reservation = Wait(_ledger.TryReserveAsync(reservationId));
         if (!reservation.Success)
         {
             return _fallbackSynthesizer.Synthesize(query, relevantChunks);
         }
 
+        // A provider call has been authorized once this is true; from then on the outcome of
+        // any failure is unknown and must stay charged instead of being refunded.
+        var dispatched = false;
         try
         {
             const string systemPrompt =
@@ -46,28 +45,37 @@ public sealed class ModelGroundedSynthesizer : IAssistantSynthesizer
             var userMessage = $"Question: {query}\n\nEvidence Context:\n" +
                 string.Join("\n", relevantChunks.Select(c => $"- [{c.Slug} / {c.Title}]: {c.Content}"));
 
-            var genTask = _modelProvider.GenerateAsync(new ModelProviderRequest(systemPrompt, userMessage, Tools: null, MaxOutputTokens: 600));
-            var genResponse = genTask.IsCompletedSuccessfully
-                ? genTask.Result
-                : genTask.AsTask().GetAwaiter().GetResult();
-
-            if (!genResponse.Success || string.IsNullOrWhiteSpace(genResponse.Text))
+            // One token per UTF-16 unit is an upper bound, so this can only over-reserve.
+            var estimatedInputTokens = (int)Math.Min(int.MaxValue, (long)systemPrompt.Length + userMessage.Length);
+            var call = Wait(_ledger.TryBeginCallAsync(reservationId, estimatedInputTokens, ModelControlPolicy.ApprovedMaxOutputTokens));
+            if (!call.Allowed)
             {
-                _ledger.ReleasePermitAsync(reservationId);
+                Wait(_ledger.CancelUndispatchedAsync(reservationId));
                 return _fallbackSynthesizer.Synthesize(query, relevantChunks);
             }
 
-            var commitTask = _ledger.CommitAsync(
-                reservationId,
-                actualCostMicroUsd: Math.Max(1, (genResponse.InputTokens * 75 + genResponse.OutputTokens * 300) / 1000),
-                inputTokensUsed: genResponse.InputTokens,
-                outputTokensUsed: genResponse.OutputTokens,
-                callsMade: 1);
+            dispatched = true;
+            var genResponse = Wait(_modelProvider.GenerateAsync(new ModelProviderRequest(
+                systemPrompt,
+                userMessage,
+                Tools: null,
+                MaxOutputTokens: ModelControlPolicy.ApprovedMaxOutputTokens)));
 
-            if (!commitTask.IsCompletedSuccessfully)
+            if (!genResponse.Success || string.IsNullOrWhiteSpace(genResponse.Text))
             {
-                commitTask.AsTask().GetAwaiter().GetResult();
+                Wait(_ledger.AbandonAsync(reservationId));
+                return _fallbackSynthesizer.Synthesize(query, relevantChunks);
             }
+
+            var completed = Wait(_ledger.CompleteCallAsync(
+                reservationId,
+                new ModelUsage(genResponse.InputTokens, genResponse.OutputTokens)));
+            if (completed != ModelControlOutcome.Applied)
+            {
+                return _fallbackSynthesizer.Synthesize(query, relevantChunks);
+            }
+
+            Wait(_ledger.SettleAsync(reservationId));
 
             var citations = relevantChunks.Select(c => new AssistantCitation(
                 c.ChunkId,
@@ -87,8 +95,20 @@ public sealed class ModelGroundedSynthesizer : IAssistantSynthesizer
         }
         catch
         {
-            _ledger.ReleasePermitAsync(reservationId);
+            // Best effort and never a refund: without a dispatched call nothing was spent.
+            try
+            {
+                Wait(dispatched ? _ledger.AbandonAsync(reservationId) : _ledger.CancelUndispatchedAsync(reservationId));
+            }
+            catch
+            {
+                // The ledger keeps the charge and the permit lease protects the allowance.
+            }
+
             return _fallbackSynthesizer.Synthesize(query, relevantChunks);
         }
     }
+
+    private static T Wait<T>(ValueTask<T> task) =>
+        task.IsCompletedSuccessfully ? task.Result : task.AsTask().GetAwaiter().GetResult();
 }

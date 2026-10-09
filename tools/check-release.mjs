@@ -66,7 +66,20 @@ const FORBIDDEN_PERSISTENCE_TOKENS = [
 ];
 const FORBIDDEN_PACKAGES = /EntityFramework|Npgsql|Dapper|MongoDB|Sqlite|StackExchange\.Redis|Microsoft\.Data\.SqlClient|CosmosDB|Cosmos|DynamoDB|Firestore/i;
 const FORBIDDEN_RESOURCES =
-  /resource\s+"(google_sql_[a-z_]+|google_firestore_[a-z_]+|google_redis_[a-z_]+|google_bigtable_[a-z_]+|google_spanner_[a-z_]+|google_storage_bucket|cloudflare_d1_database|cloudflare_workers_kv[a-z_]*|cloudflare_r2_bucket|cloudflare_durable_object[a-z_]*)"/;
+  /resource\s+"(google_sql_[a-z_]+|google_firestore_[a-z_]+|google_redis_[a-z_]+|google_bigtable_[a-z_]+|google_spanner_[a-z_]+|google_storage_bucket|cloudflare_d1_database|cloudflare_workers_kv[a-z_]*|cloudflare_r2_bucket|cloudflare_durable_object[a-z_]*)"/g;
+
+// The one approved durable operational record is the Assistant's model control ledger
+// (docs/runbooks/model-control.md): a Firestore database owned by a single Terraform stack and
+// reached only by the Assistant module's adapter. These exceptions are exact: the same package
+// or resource anywhere else is still a regression.
+export const APPROVED_PERSISTENCE = {
+  packages: {
+    "backend/src/Modules/Assistant/Rafael.Portfolio.Modules.Assistant/Rafael.Portfolio.Modules.Assistant.csproj": ["Google.Cloud.Firestore"],
+  },
+  resources: {
+    "deployment/control-ledger/main.tf": ["google_firestore_database", "google_firestore_field"],
+  },
+};
 
 export const REQUIRED_SECTIONS = [
   "## Release Governance and Boundary",
@@ -254,12 +267,17 @@ export function checkRelease(files) {
     }
     if (path.endsWith(".csproj")) {
       for (const match of content.matchAll(/<PackageReference\s+Include="([^"]+)"/g)) {
-        if (FORBIDDEN_PACKAGES.test(match[1])) fail("persistence-tripwire", `${path} depends on ${match[1]}`);
+        if (FORBIDDEN_PACKAGES.test(match[1]) && !(APPROVED_PERSISTENCE.packages[path] ?? []).includes(match[1])) {
+          fail("persistence-tripwire", `${path} depends on ${match[1]}`);
+        }
       }
     }
     if (path.endsWith(".tf")) {
-      const resource = FORBIDDEN_RESOURCES.exec(stripHcl(content));
-      if (resource) fail("persistence-tripwire", `${path} declares ${resource[1]}`);
+      for (const resource of stripHcl(content).matchAll(FORBIDDEN_RESOURCES)) {
+        if (!(APPROVED_PERSISTENCE.resources[path] ?? []).includes(resource[1])) {
+          fail("persistence-tripwire", `${path} declares ${resource[1]}`);
+        }
+      }
     }
   }
 
@@ -444,6 +462,9 @@ function checkRunbook(runbook, managedSecrets, fail) {
     fail("privacy-claims", "external mailbox and provider retention must be stated and linked to the Contact runbook");
   }
   if (!/tripwire/i.test(runbook)) fail("privacy-claims", "persistence checks must be described as tripwires");
+  if (!/model control ledger/i.test(runbook) || !runbook.includes("model-control.md") || !/not a total invoice cap/i.test(runbook)) {
+    fail("privacy-claims", "the approved model control ledger exception and its cost-gate limit must be documented and linked");
+  }
   if (!/owner-authorized/i.test(runbook) || !/disabled/i.test(runbook)) {
     fail("privacy-claims", "Contact must be described as disabled until owner-authorized activation");
   }

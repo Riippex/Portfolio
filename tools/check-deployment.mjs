@@ -24,6 +24,12 @@ export const CHECKED_FILES = [
   "deployment/cloudflare/variables.tf",
   "deployment/cloudflare/versions.tf",
   "deployment/cloudflare/terraform.tfvars.example",
+  "deployment/control-ledger/main.tf",
+  "deployment/control-ledger/outputs.tf",
+  "deployment/control-ledger/variables.tf",
+  "deployment/control-ledger/versions.tf",
+  "deployment/control-ledger/terraform.tfvars.example",
+  "docs/runbooks/model-control.md",
   "frontend/wrangler.jsonc",
   "frontend/worker/entry.ts",
   "frontend/src/modules/security/admission.ts",
@@ -262,6 +268,14 @@ export function checkDeployment(files) {
   const cfAll = Object.values(cf).join("\n");
   const cfTfvars = need("deployment/cloudflare/terraform.tfvars.example");
 
+  const ledger = {
+    main: stripHcl(need("deployment/control-ledger/main.tf")),
+    variables: stripHcl(need("deployment/control-ledger/variables.tf")),
+    outputs: stripHcl(need("deployment/control-ledger/outputs.tf")),
+    versions: stripHcl(need("deployment/control-ledger/versions.tf")),
+  };
+  const ledgerAll = Object.values(ledger).join("\n");
+
   const ci = stripYaml(need(".github/workflows/ci.yml"));
   const deploy = stripYaml(need(".github/workflows/deploy.yml"));
   const deployJobs = yamlJobs(deploy);
@@ -293,7 +307,7 @@ export function checkDeployment(files) {
   }
 
   // 2. Secrets stay out of Terraform state ----------------------------------------------
-  for (const [label, text] of [["GCP", gcpAll], ["Cloudflare", cfAll]]) {
+  for (const [label, text] of [["GCP", gcpAll], ["Cloudflare", cfAll], ["control ledger", ledgerAll]]) {
     if (/secret_data|secret_data_wo|google_secret_manager_secret_version|secret_text_binding|cloudflare_turnstile_widget|random_password|google_service_account_key|private_key/.test(text)) {
       fail("secret-state", `${label} definitions must not own secret payloads (secret versions, secret bindings, the Turnstile widget, generated secrets, or keys)`);
     }
@@ -544,7 +558,11 @@ export function checkDeployment(files) {
   if (/credentials|access_token|impersonate_service_account|private_key/.test(googleProvider)) {
     fail("plan-secrets", 'provider "google" must not carry credentials');
   }
-  for (const [label, variables] of [["Cloudflare", cf.variables], ["GCP", gcp.variables]]) {
+  const ledgerProvider = providerBlock(ledger.versions, "google") ?? "";
+  if (/credentials|access_token|impersonate_service_account|private_key/.test(ledgerProvider)) {
+    fail("plan-secrets", 'the control ledger provider "google" must not carry credentials');
+  }
+  for (const [label, variables] of [["Cloudflare", cf.variables], ["GCP", gcp.variables], ["control ledger", ledger.variables]]) {
     if (/sensitive\s*=\s*true/.test(variables) || /variable\s+"[^"]*(token|secret|password|credential|api_key)[^"]*"/i.test(variables)) {
       fail("plan-secrets", `${label} must have no credential-like or sensitive root variable (saved plans record root inputs)`);
     }
@@ -670,6 +688,79 @@ export function checkDeployment(files) {
     [/run_worker_first/, "admission before static assets"],
   ]) {
     if (!needle.test(runbook)) fail("documentation", `docs/runbooks/infrastructure.md must document ${why}`);
+  }
+
+  // 11. The shared model control database --------------------------------------------------
+  // One database for the whole portfolio, owned by one gated stack. A stage never declares it,
+  // so dev and prod cannot end up with independent allowances.
+  const ledgerCreate = hclBlock(ledger.variables, /variable\s+"create_database"/) ?? "";
+  if (!/default\s*=\s*false/.test(ledgerCreate)) {
+    fail("model-control", "create_database must default to false so nothing is created without owner activation");
+  }
+  const ledgerDatabase = resourceBlock(ledger.main, "google_firestore_database", "control") ?? "";
+  if (!/count\s*=\s*var\.create_database\s*\?\s*1\s*:\s*0/.test(ledgerDatabase)) {
+    fail("model-control", "the control database must exist only when create_database is true");
+  }
+  if (!/delete_protection_state\s*=\s*"DELETE_PROTECTION_ENABLED"/.test(ledgerDatabase) ||
+      !/deletion_policy\s*=\s*"ABANDON"/.test(ledgerDatabase) ||
+      !/prevent_destroy\s*=\s*true/.test(ledgerDatabase)) {
+    fail("model-control", "the control database must be protected against deletion at the service and in Terraform");
+  }
+  if (!/type\s*=\s*"FIRESTORE_NATIVE"/.test(ledgerDatabase)) {
+    fail("model-control", "the control database must be Firestore Native mode");
+  }
+  const ledgerTtl = resourceBlock(ledger.main, "google_firestore_field", "ttl") ?? "";
+  if (!/"model_control_periods"/.test(ledger.main) || !/"model_control_reservations"/.test(ledger.main) ||
+      !/field\s*=\s*"expiresAt"/.test(ledgerTtl) || !/ttl_config\s*\{/.test(ledgerTtl)) {
+    fail("model-control", "TTL must cover the period counters and the reservation metadata on expiresAt");
+  }
+  if (/index_config/.test(ledgerTtl)) {
+    fail("model-control", "the TTL field must keep its index because the backend range-queries expiresAt");
+  }
+  const ledgerGrants = [...ledger.main.matchAll(/resource\s+"google_project_iam_(\w+)"\s+"(\w+)"/g)].map((match) => `${match[1]}.${match[2]}`);
+  const ledgerRoles = [...ledger.main.matchAll(/role\s*=\s*"([^"]+)"/g)].map((match) => match[1]);
+  const ledgerGrant = resourceBlock(ledger.main, "google_project_iam_member", "runtime") ?? "";
+  if (ledgerGrants.join() !== "member.runtime" || ledgerRoles.join() !== "roles/datastore.user" ||
+      !/condition\s*\{[\s\S]*?expression\s*=\s*"resource\.name\s*==/.test(ledgerGrant) ||
+      !/for_each\s*=\s*var\.create_database/.test(ledgerGrant)) {
+    fail("model-control", "runtime access must be exactly roles/datastore.user, conditioned to the control database and gated by create_database");
+  }
+  if (/allUsers|allAuthenticatedUsers|roles\/(owner|editor|datastore\.owner|firebase)/.test(ledgerAll)) {
+    fail("model-control", "the control database must not be granted to public principals or broad roles");
+  }
+  if (/google_firestore|firestore\.googleapis\.com/.test(gcpAll)) {
+    fail("model-control", "stage stacks must not declare the database or its APIs; the shared stack owns them");
+  }
+  if (!/Assistant__ModelControl__Firestore__ProjectId"\s*=\s*var\.control_ledger_project_id/.test(gcp.main) ||
+      !/Assistant__ModelControl__Firestore__DatabaseId"\s*=\s*var\.control_ledger_database_id/.test(gcp.main)) {
+    fail("model-control", "the stage must pass only the shared database's project and id to the service");
+  }
+  if (!/\(var\.control_ledger_project_id == ""\)\s*==\s*\(var\.control_ledger_database_id == ""\)/.test(gcp.main)) {
+    fail("model-control", "a stage must set the shared database's project and id together or not at all");
+  }
+  if (/Assistant__ModelControl__(Tariff|InitializeStore)/.test(gcpAll)) {
+    fail("model-control", "Terraform must not configure a tariff or initialize the store: paid model use stays disabled until a separate activation");
+  }
+  if (!/emulators firestore start/.test(ci) || !/FIRESTORE_EMULATOR_HOST/.test(ci) || !/Rafael\.Portfolio\.EmulatorTests\.csproj/.test(ci)) {
+    fail("model-control", "ci.yml must run the emulator-backed ledger tests against a local Firestore emulator");
+  }
+  if (!/terraform -chdir=deployment\/control-ledger validate/.test(ci)) {
+    fail("deploy-gate", "ci.yml must validate the control ledger definitions");
+  }
+  const modelControl = need("docs/runbooks/model-control.md");
+  for (const [needle, why] of [
+    [/not a total invoice cap/i, "that the ledger is not a total invoice cap"],
+    [/40 days/, "the 40-day retention after the period ends"],
+    [/INCOMPLETE/, "that a missing emulator is incomplete, not passed"],
+    [/Uncertain/, "that unknown outcomes stay charged"],
+    [/deployment\/control-ledger/, "the shared database ownership"],
+    [/never skipped or passed/i, "that emulator tests never skip"],
+    [/IP address or country/i, "that no visitor data is stored"],
+  ]) {
+    if (!needle.test(modelControl)) fail("documentation", `docs/runbooks/model-control.md must document ${why}`);
+  }
+  if (!/deployment\/control-ledger/.test(runbook) || !/model-control\.md|model control/i.test(runbook)) {
+    fail("documentation", "docs/runbooks/infrastructure.md must document the shared control database and link the model control runbook");
   }
 
   return violations;

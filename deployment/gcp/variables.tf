@@ -116,3 +116,17 @@ variable "ci_service_account_id" {
   description = "Service account ID for the dedicated CI/CD deployer"
   default     = "sa-portfolio-ci"
 }
+
+variable "control_ledger_project_id" {
+  type        = string
+  description = "Project that hosts the shared model control database (the project_id of deployment/control-ledger). Leave empty until that stack is applied; paid model work then stays disabled. Dev and prod must name the same project and database so they share one allowance."
+  default     = ""
+  nullable    = false
+}
+
+variable "control_ledger_database_id" {
+  type        = string
+  description = "Firestore database id of the shared model control database (the database_id of deployment/control-ledger)."
+  default     = ""
+  nullable    = false
+}

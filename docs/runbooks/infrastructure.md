@@ -19,6 +19,8 @@ Each piece has exactly one owner, so infrastructure maintenance cannot undo a re
 | Frontend Worker **secrets** `ASSISTANT_PROXY_IDENTITY_SECRET` and `TEAM_ALLOWLIST` | Owner, out of band | `wrangler secret put` on the exact Worker; `TEAM_ALLOWLIST` is separate for `dev` and `prod`. Deploys never touch secrets. |
 | Frontend Worker stage `PORTFOLIO_STAGE`, rate-limit bindings, admission entry | `frontend/wrangler.jsonc` | Per Wrangler environment, baked into the build by `CLOUDFLARE_ENV` and checked offline. |
 | Backend stage `Portfolio__Stage` | Terraform | Set from `environment` (`dev` or `prod`) on the Cloud Run service. |
+| Shared model control database, its TTL policies and runtime access | Terraform, one stack (`deployment/control-ledger`) | Owned once for the whole portfolio and never by a stage; gated by `create_database`. See [model control](model-control.md). |
+| Backend store settings `Assistant__ModelControl__Firestore__*` | Terraform (stage stack) | Project and database id of the shared database, both or neither. |
 | Zone DNS record and Worker route | Terraform (`deployment/cloudflare`) | Off until `enable_custom_domain`. |
 | Turnstile widget | Owner, in the Cloudflare console | The provider would store the widget secret in state, so Terraform does not manage it. |
 | Contact (Cloudflare Email) credentials | Deferred | Contact is disabled; no credential is provisioned or read until a separate, owner-authorized activation. |
@@ -44,6 +46,20 @@ The deployment stage (`dev`, `staging`, `prod`) is a separate input, `environmen
 **Edge limits.** Before dispatching to the backend, the Worker applies Cloudflare Workers Rate Limiting bindings to the shared assistant chat and job analysis quota (`/api/assistant/chat/stream`, `/api/jobs/analyze`): an ordinary address 5 per minute, an allowlisted team address 15 per minute, and 100 per minute per country, with team traffic still counting toward its country. A request refused for its own address does not spend country capacity. The per-address counter key is a stable, domain-separated HMAC pseudonym of the canonical address, bound to the stage but not to the endpoint (so chat and job analysis keep one quota and equivalent IPv6 spellings share one counter), keyed with the existing server-only `ASSISTANT_PROXY_IDENTITY_SECRET`; Cloudflare never receives the raw address, and the Worker answers 503 without counting when that secret is missing. The raw address stays request-local for admission, identity signing and Turnstile and is never logged. Refusals are 429 with `Retry-After: 60`; a missing or failing binding fails closed with 503. These counters are **approximate**: Cloudflare keeps them per location and updates them eventually, so a visitor reaching several locations, or a burst, can exceed the stated numbers briefly, and they are not a global quota. The backend keeps its own independent in-memory limits with the same numbers (per instance, with a bounded table), and Contact has its separate backend limit of 3 per 10 minutes.
 
 **Rollout order.** A backend image that includes this change refuses to start without `Portfolio__Stage`, and the deploy job refuses a Worker without `TEAM_ALLOWLIST`. For an existing stage: set `TEAM_ALLOWLIST` on its Worker, apply `deployment/gcp` for the stage so the service carries `Portfolio__Stage` (a Terraform apply creates a new revision; it never replaces the deploy-owned image), and only then run the deploy workflow. The frontend and backend must be deployed together, because the version 1 colon-delimited identity is no longer accepted by the backend.
+
+## Shared model control database
+
+The Assistant's budget ledger needs exactly one Firestore database for the whole portfolio, so
+dev and prod share one daily and monthly allowance and one set of permits. `deployment/control-ledger`
+declares it, its TTL policies (counters and reservation metadata expire 40 days after their period
+ends) and the least-privilege access of each stage's backend service account; it creates nothing
+until `create_database = true`, which the owner sets deliberately, once. Stage stacks only pass
+the project and database id to the service (`control_ledger_project_id`, `control_ledger_database_id`, both
+or neither) and never declare a database, so a stage cannot create a second allowance. Order: apply the
+stage stacks (to get their service account emails), apply `control-ledger` with those emails, set the two
+stage variables to the same values, apply the stages, then follow the one-time initialization in
+[model control](model-control.md). Paid model use stays disabled: no tariff is configured and the provider is
+the disabled one. The ledger bounds model cost only; it is not a total invoice cap.
 
 ## Secrets and the data-handling policy
 

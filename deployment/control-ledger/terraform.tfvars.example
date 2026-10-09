@@ -1,0 +1,17 @@
+# Shared model control database configuration example.
+# Copy this file to terraform.tfvars (git-ignored) and fill in real values.
+# This stack holds no secret. It is applied once for the whole portfolio, not per stage.
+
+project_id  = "my-gcp-project-id"
+location_id = "us-central1"
+database_id = "portfolio-control"
+
+# Activation gate: nothing is declared or created until the owner authorizes it.
+create_database = false
+
+# One backend runtime service account per stage, from each stage's service_account_email
+# output. Add them only after those stages exist.
+runtime_service_accounts = [
+  # "<dev-backend-service-account-email>",
+  # "<prod-backend-service-account-email>",
+]

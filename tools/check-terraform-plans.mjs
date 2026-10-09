@@ -4,6 +4,7 @@
 //
 //   terraform -chdir=deployment/gcp init -backend=false
 //   terraform -chdir=deployment/cloudflare init -backend=false
+//   terraform -chdir=deployment/control-ledger init -backend=false
 //   node tools/check-terraform-plans.mjs
 //
 // What keeps these plans offline and harmless:
@@ -21,6 +22,11 @@
 //   2. The GCP foundation-to-service transition: the fresh default creates no service, the
 //      persisted service-phase inputs keep an established service, and losing them fails
 //      closed instead of scheduling the service for removal.
+//   3. The shared model control database: nothing is declared until it is activated, it is
+//      created once with deletion protection and TTL on both metadata collections, access is
+//      limited to the named runtime identities by an IAM condition, and neither losing the
+//      activation gate nor a destroy plan can remove an established database. A stage stack
+//      only receives the database's project and id, both or neither.
 
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -33,6 +39,7 @@ import { inflateRawSync } from "node:zlib";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const gcpDir = join(root, "deployment/gcp");
 const cloudflareDir = join(root, "deployment/cloudflare");
+const ledgerDir = join(root, "deployment/control-ledger");
 const IMAGE = "us-central1-docker.pkg.dev/synthetic-project/portfolio/backend:synthetic-tag";
 
 // Synthetic and unique per run, so a hit can only come from this run's input.
@@ -295,10 +302,148 @@ function proveServiceTransition(work) {
   record(!gcpRunTexts.some(reachedNetwork), "service scenarios made no provider network attempt", `${gcpRunTexts.length} plans`);
 }
 
+
+// ---------------------------------------------------------------------------------------
+// 3. Shared model control database
+// ---------------------------------------------------------------------------------------
+
+const ledgerRunTexts = [];
+
+function ledgerPlan(work, label, state, vars, { destroy = false, save = false } = {}) {
+  const planPath = join(work, `ledger-${label.replace(/\W+/g, "-")}.plan`);
+  const args = ["plan", "-input=false", "-lock=false", "-refresh=false", "-no-color", `-state=${state}`];
+  if (destroy) args.push("-destroy");
+  if (save) args.push(`-out=${planPath}`);
+  for (const variable of ["project_id=synthetic-project", ...vars]) args.push("-var", variable);
+  const result = terraform(ledgerDir, args);
+  ledgerRunTexts.push(result.text);
+  const changes = save && result.status === 0
+    ? JSON.parse(terraform(ledgerDir, ["show", "-json", planPath]).stdout).resource_changes ?? []
+    : [];
+  return { ...result, changes };
+}
+
+function establishedDatabaseState(work) {
+  const schema = JSON.parse(terraform(ledgerDir, ["providers", "schema", "-json"]).stdout);
+  const database = schema.provider_schemas["registry.terraform.io/hashicorp/google"].resource_schemas.google_firestore_database;
+  const attributes = {};
+  for (const name of Object.keys(database.block.attributes ?? {})) attributes[name] = null;
+  for (const [name, block] of Object.entries(database.block.block_types ?? {})) {
+    attributes[name] = block.nesting_mode === "list" || block.nesting_mode === "set" ? [] : null;
+  }
+  Object.assign(attributes, {
+    id: "projects/synthetic-project/databases/portfolio-control",
+    name: "portfolio-control",
+    project: "synthetic-project",
+    location_id: "us-central1",
+    type: "FIRESTORE_NATIVE",
+    delete_protection_state: "DELETE_PROTECTION_ENABLED",
+    deletion_policy: "ABANDON",
+  });
+  const path = join(work, "established-database.tfstate");
+  writeFileSync(path, JSON.stringify({
+    version: 4,
+    terraform_version: "1.15.8",
+    serial: 1,
+    lineage: randomUUID(),
+    outputs: {},
+    resources: [
+      {
+        mode: "managed",
+        type: "google_firestore_database",
+        name: "control",
+        provider: 'provider["registry.terraform.io/hashicorp/google"]',
+        instances: [{ index_key: 0, schema_version: database.version, attributes, sensitive_attributes: [] }],
+      },
+    ],
+    check_results: null,
+  }));
+  return path;
+}
+
+function proveControlLedger(work) {
+  const empty = join(work, "ledger-empty.tfstate");
+  // Synthetic identities, assembled from parts: they are not real addresses.
+  const synthetic = (project) => ["sa-portfolio-backend", `${project}.iam.gserviceaccount.com`].join("@");
+  const accounts = [`runtime_service_accounts=${JSON.stringify([synthetic("dev-project"), synthetic("prod-project")])}`];
+
+  let run = ledgerPlan(work, "default", empty, [], { save: true });
+  record(run.status === 0 && run.changes.length === 0, "control ledger declares nothing until it is activated", `${run.changes.length} changes`);
+
+  run = ledgerPlan(work, "activated", empty, ["create_database=true"], { save: true });
+  const byType = (type) => run.changes.filter((change) => change.type === type);
+  record(run.status === 0 && byType("google_firestore_database").length === 1, "activation creates exactly one database");
+  const database = byType("google_firestore_database")[0]?.change.after;
+  record(
+    database?.type === "FIRESTORE_NATIVE" && database.delete_protection_state === "DELETE_PROTECTION_ENABLED" && database.deletion_policy === "ABANDON" && database.name === "portfolio-control",
+    "the database is created with deletion protection and its approved name"
+  );
+  const ttl = byType("google_firestore_field").map((change) => `${change.change.after.collection}.${change.change.after.field}`).sort();
+  record(JSON.stringify(ttl) === JSON.stringify(["model_control_periods.expiresAt", "model_control_reservations.expiresAt"]),
+    "TTL covers the period counters and the reservation metadata on expiresAt", ttl.join(", "));
+  record(byType("google_firestore_field").every((change) => Array.isArray(change.change.after.ttl_config) && change.change.after.ttl_config.length === 1),
+    "both TTL fields enable the TTL policy");
+  record(byType("google_project_iam_member").length === 0, "no runtime identity is granted access until it is named");
+  record(!run.changes.some((change) => change.change.actions.includes("delete")), "activation destroys nothing");
+
+  run = ledgerPlan(work, "identities", empty, ["create_database=true", ...accounts], { save: true });
+  const grants = byType("google_project_iam_member").map((change) => change.change.after);
+  record(grants.length === 2 && grants.every((grant) => grant.role === "roles/datastore.user" && /^serviceAccount:sa-portfolio-backend@/.test(grant.member)),
+    "each stage runtime identity receives only the Firestore user role", `${grants.length} grants`);
+  record(grants.every((grant) => grant.condition?.[0]?.expression === 'resource.name == "projects/synthetic-project/databases/portfolio-control"'),
+    "every grant is limited by an IAM condition to the control database");
+  record(!run.changes.some((change) => /allUsers|allAuthenticatedUsers/.test(JSON.stringify(change.change.after ?? {}))), "no public principal is granted access");
+
+  run = ledgerPlan(work, "bad identity", empty, ["create_database=true", 'runtime_service_accounts=["not-a-service-account"]']);
+  record(run.status !== 0 && /runtime_service_accounts must be service account emails/.test(run.text.replace(/\s+/g, " ")), "a non service account identity is refused");
+
+  const established = establishedDatabaseState(work);
+  run = ledgerPlan(work, "gate lost", established, []);
+  record(run.status !== 0 && /prevent_destroy/.test(run.text), "losing the activation gate fails closed instead of removing the database");
+  run = ledgerPlan(work, "destroy", established, ["create_database=true"], { destroy: true });
+  record(run.status !== 0 && /prevent_destroy/.test(run.text), "a destroy plan cannot remove the established database");
+  run = ledgerPlan(work, "maintenance", established, ["create_database=true"], { save: true });
+  record(run.status === 0 && !run.changes.some((change) => change.address.startsWith("google_firestore_database") && (change.change.actions.includes("delete") || change.change.actions.includes("create"))),
+    "maintenance keeps the established database");
+
+  record(!ledgerRunTexts.some(reachedNetwork), "control ledger scenarios made no provider network attempt", `${ledgerRunTexts.length} plans`);
+}
+
+function proveStageWiring(work) {
+  const empty = join(work, "stage-empty.tfstate");
+  const persisted = ["create_service=true", `container_image=${IMAGE}`];
+  const env = (changes) =>
+    (changes.find((change) => change.address === "google_cloud_run_v2_service.backend[0]")?.change.after.template[0].containers[0].env ?? [])
+      .map((entry) => `${entry.name}=${entry.value}`);
+  const texts = [];
+  const plan = (label, extra) => {
+    const run = gcpPlan(work, label, empty, [...persisted, ...extra], { save: true });
+    texts.push(run.text);
+    return run;
+  };
+
+  let run = plan("stage without ledger", []);
+  record(run.status === 0 && !env(run.changes).some((entry) => entry.startsWith("Assistant__ModelControl")),
+    "a stage without a configured database receives no store configuration (paid work stays disabled)");
+
+  run = plan("stage with ledger", ["control_ledger_project_id=ledger-project", "control_ledger_database_id=portfolio-control"]);
+  const configured = env(run.changes);
+  record(run.status === 0 && configured.includes("Assistant__ModelControl__Firestore__ProjectId=ledger-project") && configured.includes("Assistant__ModelControl__Firestore__DatabaseId=portfolio-control"),
+    "a stage receives only the shared database's project and id");
+  record(!run.changes.some((change) => change.type.startsWith("google_firestore")), "a stage never plans a database or TTL field of its own");
+
+  for (const half of ["control_ledger_project_id=ledger-project", "control_ledger_database_id=portfolio-control"]) {
+    run = plan(`half ${half}`, [half]);
+    record(run.status !== 0 && /both control_ledger_project_id and control_ledger_database_id/.test(run.text.replace(/\s+/g, " ")), `a stage with only ${half.split("=")[0]} is refused`);
+  }
+
+  record(!texts.some(reachedNetwork), "stage wiring scenarios made no provider network attempt", `${texts.length} plans`);
+}
+
 // ---------------------------------------------------------------------------------------
 
 function main() {
-  for (const dir of [gcpDir, cloudflareDir]) {
+  for (const dir of [gcpDir, cloudflareDir, ledgerDir]) {
     if (!existsSync(join(dir, ".terraform"))) {
       console.error(`Run \`terraform -chdir=${dir} init -backend=false\` first.`);
       process.exit(2);
@@ -309,6 +454,8 @@ function main() {
   try {
     proveCredentialSecrecy(work);
     proveServiceTransition(work);
+    proveControlLedger(work);
+    proveStageWiring(work);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

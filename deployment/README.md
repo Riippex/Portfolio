@@ -5,6 +5,7 @@ Reproducible Infrastructure-as-Code (Terraform) for the portfolio architecture. 
 ## Provider Split
 
 - `cloudflare/`: zone routing for the frontend only: the stage hostname DNS record and the route to the deployed Worker. It does not manage the Worker script, its variables or secrets, or the Turnstile widget.
+- `control-ledger/`: the one shared Cloud Firestore database for the Assistant's model budget ledger, its TTL policies and the stage runtime identities' access. Gated (`create_database = false`) and applied once for the whole portfolio, never per stage.
 - `gcp/`: the Google Cloud Run host for the `.NET 10` modular monolith (`Rafael.Portfolio.Web`), Artifact Registry, empty Secret Manager containers, the required service APIs, Workload Identity Federation, and the runtime and CI service accounts.
 
 ## Directory Structure
@@ -17,6 +18,12 @@ deployment/
 │   ├── outputs.tf                 # Worker name and hostname
 │   ├── versions.tf                # Provider requirements; empty provider block (env authentication)
 │   └── terraform.tfvars.example   # Example variables template (never commit real tokens)
+├── control-ledger/
+│   ├── main.tf                    # Shared model control database, TTL policies, scoped runtime access (gated)
+│   ├── variables.tf               # Project, database id, create_database gate, runtime service accounts
+│   ├── outputs.tf                 # Project and database id for the stage stacks
+│   ├── versions.tf                # Provider requirements (no credentials)
+│   └── terraform.tfvars.example   # Example variables template
 └── gcp/
     ├── apis.tf                    # Required service APIs, including federation APIs
     ├── main.tf                    # Registry, runtime account, secret containers, Cloud Run (gated)
@@ -45,7 +52,7 @@ Terraform ignores only the deploy-owned Cloud Run attributes and never declares 
 4. **Scale-to-zero, bounded scaling**: `min_instances = 0`, `max_instances = 2`.
 5. **Least privilege, keyless**: the CI account holds exactly four resource-scoped roles, reached through Workload Identity Federation that trusts one repository, GitHub environment, and branch per stage. No service account keys.
 6. **Gated deployment**: manual only; authorize (target and branch), then validate the exact commit (including the published-backend integration smoke), then deploy. Only the backend job requests `id-token: write`.
-7. **Zero application persistence**: no database or durable storage.
+7. **One bounded durable record**: no application data is persisted. The only database is the shared model control ledger (`control-ledger/`), which holds operational accounting counters and opaque reservation metadata, gated and deletion-protected.
 8. **Ignored local state**: real `*.tfvars` and `*.tfstate` are git-ignored; example files hold placeholders.
 
 ## Local Validation
@@ -56,6 +63,7 @@ Verify the definitions without touching any provider:
 terraform fmt -check -recursive deployment
 terraform -chdir=deployment/gcp init -backend=false && terraform -chdir=deployment/gcp validate
 terraform -chdir=deployment/cloudflare init -backend=false && terraform -chdir=deployment/cloudflare validate
+terraform -chdir=deployment/control-ledger init -backend=false && terraform -chdir=deployment/control-ledger validate
 
 node --test tools/check-deployment.test.mjs
 node tools/check-deployment.mjs

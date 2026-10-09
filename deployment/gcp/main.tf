@@ -26,6 +26,14 @@ locals {
     turnstile_secret_key  = "turnstile-secret-key"
     proxy_identity_secret = "proxy-identity-secret"
   }
+
+  # The shared model control database is owned by deployment/control-ledger and is reached by
+  # project and database id only. Unset, the service receives no store configuration and paid
+  # model work stays disabled; a stage never creates or owns a copy of the database.
+  control_ledger_env = var.control_ledger_project_id != "" && var.control_ledger_database_id != "" ? {
+    "Assistant__ModelControl__Firestore__ProjectId"  = var.control_ledger_project_id
+    "Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id
+  } : {}
 }
 
 # Artifact Registry Docker repository for container images
@@ -149,6 +157,14 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.environment
       }
 
+      dynamic "env" {
+        for_each = local.control_ledger_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       env {
         name  = "Contact__Enabled"
         value = "false"
@@ -197,6 +213,11 @@ resource "google_cloud_run_v2_service" "backend" {
     precondition {
       condition     = var.container_image != ""
       error_message = "create_service requires container_image: push an image to Artifact Registry first and pass its immutable reference."
+    }
+
+    precondition {
+      condition     = (var.control_ledger_project_id == "") == (var.control_ledger_database_id == "")
+      error_message = "Set both control_ledger_project_id and control_ledger_database_id (the shared database from deployment/control-ledger) or neither."
     }
 
     precondition {
