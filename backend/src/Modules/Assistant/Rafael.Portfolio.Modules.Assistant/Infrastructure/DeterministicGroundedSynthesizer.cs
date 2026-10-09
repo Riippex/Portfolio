@@ -13,7 +13,7 @@ public sealed class DeterministicGroundedSynthesizer : IAssistantSynthesizer
         if (relevantChunks.Count == 0)
         {
             return new AssistantChatResponse(
-                Answer: "I don't have documented evidence in Rafael's public portfolio for that specific topic yet. You can explore documented topics like Vextis, StaffHub, or focus areas in AI & Software Engineering, or ask about specific project architecture.",
+                Answer: AssistantService.NotDocumentedMessage,
                 GroundingStatus: AssistantGroundingStatus.NotDocumented,
                 Citations: []);
         }
