@@ -58,6 +58,20 @@ describe("Worker entry", () => {
     expect(forwardedCtx).toBe(ctx);
   });
 
+  it("refuses limited routes without the server-only key secret and never dispatches", async () => {
+    const limiter = { limit: async () => ({ success: true }) };
+    const response = await worker.fetch(
+      new Request("https://portfolio.example/api/jobs/analyze", {
+        method: "POST",
+        headers: { "CF-Connecting-IP": "198.51.100.8" },
+      }),
+      { PORTFOLIO_STAGE: "prod", RATE_LIMIT_IP_ORDINARY: limiter, RATE_LIMIT_IP_TEAM: limiter, RATE_LIMIT_COUNTRY: limiter },
+      ctx
+    );
+    expect(response.status).toBe(503);
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
   it("refuses limited routes when the rate-limit bindings are missing", async () => {
     const response = await worker.fetch(
       new Request("https://portfolio.example/api/assistant/chat/stream", {

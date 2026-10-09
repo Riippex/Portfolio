@@ -1,4 +1,4 @@
-import { IDENTITY_HEADER, IDENTITY_PROOF_HEADER } from "./identity";
+import { hmacSha256Hex, IDENTITY_HEADER, IDENTITY_PROOF_HEADER } from "./identity";
 import { parseStage } from "./stage";
 import { isTeamMember, parseTeamAllowlist } from "./team-allowlist";
 import { readPlatformVisitor, type PlatformVisitor } from "./visitor";
@@ -30,6 +30,8 @@ export interface RateLimitBinding {
 
 export interface AdmissionEnv {
   readonly PORTFOLIO_STAGE?: unknown;
+  // Server-only secret that keys the pseudonym sent to the rate-limit bindings.
+  readonly ASSISTANT_PROXY_IDENTITY_SECRET?: unknown;
   readonly TEAM_ALLOWLIST?: unknown;
   readonly RATE_LIMIT_IP_ORDINARY?: RateLimitBinding;
   readonly RATE_LIMIT_IP_TEAM?: RateLimitBinding;
@@ -69,6 +71,20 @@ export function policyPath(pathname: string): string {
   }
   path = path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").toLowerCase();
   return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
+
+// Domain separator for the edge counter pseudonym; distinct from the identity proof domain so
+// one secret never yields a value usable as the other.
+export const EDGE_KEY_DOMAIN = "portfolio-edge-limit-v1\n";
+
+/**
+ * The key the rate-limit bindings count under: a stable HMAC pseudonym of the canonical
+ * address, bound to the stage and to nothing else (not the endpoint), so chat and job analysis
+ * keep one shared quota and equivalent IPv6 spellings share one counter. The raw address
+ * never leaves the request.
+ */
+export async function edgeCounterKey(secret: string, stage: string, canonicalIp: string): Promise<string> {
+  return `ip:${await hmacSha256Hex(secret, `${EDGE_KEY_DOMAIN}${stage}\nip\n${canonicalIp}`)}`;
 }
 
 function withPlatformVisitor(request: Request, visitor: PlatformVisitor | null): Request {
@@ -130,12 +146,18 @@ export async function admitRequest(request: Request, env: AdmissionEnv): Promise
     if (!ipLimiter || !countryLimiter) {
       return denial(503, "Edge rate limiting is not configured.");
     }
+    const keySecret = env.ASSISTANT_PROXY_IDENTITY_SECRET;
+    if (typeof keySecret !== "string" || keySecret.trim() === "") {
+      // Without the secret the only available key would be the raw address: refuse instead.
+      return denial(503, "Edge rate limiting is not configured.");
+    }
 
     const retryAfter = { "Retry-After": String(EDGE_LIMIT_PERIOD_SECONDS) };
     try {
       // The per-IP check runs first so a request refused for its own address does not also
       // consume country capacity. Team traffic still counts toward its country's limit.
-      if (!(await ipLimiter.limit({ key: `ip:${visitor.ip}` })).success) {
+      const ipKey = await edgeCounterKey(keySecret, stage, visitor.ip);
+      if (!(await ipLimiter.limit({ key: ipKey })).success) {
         return denial(429, "Rate limit exceeded. Please wait before trying again.", retryAfter);
       }
       if (!(await countryLimiter.limit({ key: `country:${visitor.country}` })).success) {

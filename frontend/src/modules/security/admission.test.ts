@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   admitRequest,
+  EDGE_KEY_DOMAIN,
+  edgeCounterKey,
   EDGE_LIMITS,
   policyPath,
   type AdmissionDecision,
   type AdmissionEnv,
   type RateLimitBinding,
 } from "./admission";
-import { IDENTITY_HEADER, IDENTITY_PROOF_HEADER } from "./identity";
+import { hmacSha256Hex, IDENTITY_HEADER, IDENTITY_PROOF_HEADER } from "./identity";
 
 const TEAM_IP = "203.0.113.4";
 const OTHER_IP = "198.51.100.8";
@@ -44,10 +46,17 @@ function bindings() {
   };
 }
 
-const prodEnv = (extra: Partial<AdmissionEnv> = {}): AdmissionEnv => ({ PORTFOLIO_STAGE: "prod", ...bindings(), ...extra });
+const EDGE_SECRET = "edge-test-secret";
+const prodEnv = (extra: Partial<AdmissionEnv> = {}): AdmissionEnv => ({
+  PORTFOLIO_STAGE: "prod",
+  ASSISTANT_PROXY_IDENTITY_SECRET: EDGE_SECRET,
+  ...bindings(),
+  ...extra,
+});
 const devEnv = (extra: Partial<AdmissionEnv> = {}): AdmissionEnv => ({
   PORTFOLIO_STAGE: "dev",
   TEAM_ALLOWLIST: ALLOWLIST,
+  ASSISTANT_PROXY_IDENTITY_SECRET: EDGE_SECRET,
   ...bindings(),
   ...extra,
 });
@@ -338,5 +347,104 @@ describe("edge rate limits", () => {
     for (let i = 0; i < 6; i++) await admitRequest(apiPost(OTHER_IP), env);
     const refused = (await admitRequest(apiPost(OTHER_IP), env)) as Responded;
     expect(await refused.response.text()).not.toContain(OTHER_IP);
+  });
+});
+
+describe("edge counter pseudonyms", () => {
+  const allKeys = (env: AdmissionEnv) =>
+    [env.RATE_LIMIT_IP_ORDINARY, env.RATE_LIMIT_IP_TEAM, env.RATE_LIMIT_COUNTRY].flatMap((limiter) => counterOf(limiter));
+
+  it("never gives a binding a raw address or an allowlist value", async () => {
+    const team = ["203.0.113.4", "2001:db8::1"];
+    const env = prodEnv({ TEAM_ALLOWLIST: JSON.stringify(team) });
+    const visitors = [...team, "198.51.100.8", "2001:db8:ffff::9", "::ffff:198.51.100.9"];
+    for (const ip of visitors) await admitRequest(apiPost(ip, "CO"), env);
+
+    const keys = allKeys(env);
+    expect(keys.length).toBe(visitors.length * 2);
+    for (const key of keys) {
+      expect(key).toMatch(/^(ip:[0-9a-f]{64}|country:[A-Z0-9]{2})$/);
+    }
+    const joined = keys.join("|");
+    for (const secret of [...visitors, ...team, "198.51.100.9", "2001:db8", "203.0.113", EDGE_SECRET, ALLOWLIST]) {
+      expect(joined).not.toContain(secret);
+    }
+  });
+
+  it("uses a stable pseudonym that is the same for chat and job analysis", async () => {
+    const env = prodEnv();
+    await admitRequest(apiPost(OTHER_IP), env);
+    await admitRequest(request("/api/jobs/analyze", { "CF-Connecting-IP": OTHER_IP }, "POST", "CO"), env);
+    await admitRequest(apiPost(OTHER_IP), env);
+
+    const ipKeys = counterOf(env.RATE_LIMIT_IP_ORDINARY);
+    expect(ipKeys).toHaveLength(3);
+    expect(new Set(ipKeys).size).toBe(1);
+    expect(ipKeys[0]).toBe(await edgeCounterKey(EDGE_SECRET, "prod", OTHER_IP));
+  });
+
+  it("is domain separated, stage bound and secret keyed", async () => {
+    const base = await edgeCounterKey(EDGE_SECRET, "prod", OTHER_IP);
+    expect(await edgeCounterKey(EDGE_SECRET, "dev", OTHER_IP)).not.toBe(base);
+    expect(await edgeCounterKey("another-secret", "prod", OTHER_IP)).not.toBe(base);
+    expect(await edgeCounterKey(EDGE_SECRET, "prod", "198.51.100.9")).not.toBe(base);
+    expect(base).not.toBe(`ip:${await hmacSha256Hex(EDGE_SECRET, OTHER_IP)}`);
+    expect(base).not.toBe(`ip:${await hmacSha256Hex(EDGE_SECRET, `prod\nip\n${OTHER_IP}`)}`);
+    expect(EDGE_KEY_DOMAIN).toBe("portfolio-edge-limit-v1\n");
+  });
+
+  it("counts equivalent IPv6 spellings under one pseudonym", async () => {
+    const env = prodEnv();
+    for (const ip of ["2001:db8::1", "2001:DB8:0:0:0:0:0:1", "2001:0db8::0001"]) await admitRequest(apiPost(ip), env);
+
+    expect(new Set(counterOf(env.RATE_LIMIT_IP_ORDINARY)).size).toBe(1);
+  });
+
+  it("keeps the pseudonym separate per stage so dev and prod never share a counter", async () => {
+    const dev = devEnv();
+    const prod = prodEnv({ TEAM_ALLOWLIST: ALLOWLIST });
+    await admitRequest(apiPost(TEAM_IP), dev);
+    await admitRequest(apiPost(TEAM_IP), prod);
+
+    expect(counterOf(dev.RATE_LIMIT_IP_TEAM)[0]).not.toBe(counterOf(prod.RATE_LIMIT_IP_TEAM)[0]);
+  });
+
+  it("keeps the 5 and 15 per minute limits with pseudonymous keys", async () => {
+    const ordinary = prodEnv();
+    for (let i = 0; i < 5; i++) expect((await admitRequest(apiPost(OTHER_IP), ordinary)).action).toBe("forward");
+    expect(statusOf(await admitRequest(apiPost(OTHER_IP), ordinary))).toBe(429);
+
+    const team = prodEnv({ TEAM_ALLOWLIST: ALLOWLIST });
+    for (let i = 0; i < 15; i++) expect((await admitRequest(apiPost(TEAM_IP), team)).action).toBe("forward");
+    expect(statusOf(await admitRequest(apiPost(TEAM_IP), team))).toBe(429);
+  });
+
+  it.each([undefined, "", "   ", 42, null])("fails closed with 503 and no counting when the secret is %j", async (secret) => {
+    const env = prodEnv({ ASSISTANT_PROXY_IDENTITY_SECRET: secret });
+    const decision = await admitRequest(apiPost(OTHER_IP), env);
+
+    expect(decision.action).toBe("respond");
+    expect(statusOf(decision)).toBe(503);
+    expect(allKeys(env)).toHaveLength(0);
+    expect(await (decision as Responded).response.text()).not.toContain(OTHER_IP);
+  });
+
+  it("does not require the secret for requests that are not edge limited", async () => {
+    const env = prodEnv({ ASSISTANT_PROXY_IDENTITY_SECRET: undefined });
+    expect((await admitRequest(request("/", { "CF-Connecting-IP": OTHER_IP }), env)).action).toBe("forward");
+  });
+
+  it("fails closed when the pseudonym cannot be computed", async () => {
+    const env = prodEnv();
+    const original = crypto.subtle.importKey;
+    crypto.subtle.importKey = (async () => {
+      throw new Error("crypto unavailable");
+    }) as typeof crypto.subtle.importKey;
+    try {
+      expect(statusOf(await admitRequest(apiPost(OTHER_IP), env))).toBe(503);
+      expect(allKeys(env)).toHaveLength(0);
+    } finally {
+      crypto.subtle.importKey = original;
+    }
   });
 });
