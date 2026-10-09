@@ -62,6 +62,7 @@ builder.Services.AddSingleton<ITurnstileValidator>(sp =>
         : new CloudflareTurnstileValidator(
             sp.GetRequiredService<IHttpClientFactory>().CreateClient("turnstile"),
             turnstileSecret));
+builder.Services.AddSingleton<IAssistantEvidenceAdapter, KnowledgeAssistantEvidenceAdapter>();
 builder.Services.AddSingleton<IModelProvider, DisabledModelProvider>();
 builder.Services.AddSingleton<IAssistantSynthesizer>(sp =>
     new ModelGroundedSynthesizer(
