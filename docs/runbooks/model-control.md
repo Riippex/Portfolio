@@ -155,7 +155,9 @@ calls it.
     usage and the charge becomes the tariff cost of the total (it can be higher than reserved).
   * `ChargeAsReserved`: the usage cannot be established; the reserved charge is accepted as final.
   A resolved reservation cannot be reconciled again.
-  Each of the reservation's two counters is judged independently. A counter that is missing
+  Each of the reservation's two counters is judged independently, **whether or not the charge
+  changes** (`ChargeAsReserved`, or a `Completed` whose cost equals the reserved charge, writes no
+  counter but still needs both to be valid). A counter that is missing
   because its period expired (day: 40 days after the day ends; month: 40 days after the month
   ends) is skipped and never recreated, and the other counter is still adjusted. A counter that
   is missing while its period is still live, corrupt, for another period, or too small to take a

@@ -873,6 +873,123 @@ public sealed class ModelControlLedgerTests
         Assert.Equal(Worst, ledger.DayCharged(LateNovember));
     }
 
+    // ------------------------------------------------- zero-delta reconciliation validates counters
+
+    // 6,000 input and 600 output tokens cost exactly the reserved worst case, so the charge does not change.
+    private static readonly ModelUsage WorstCaseUsage = new(6000, 600);
+
+    private static async Task<(InMemoryModelControlLedger Ledger, FakeTimeProvider Time)> AWorstCaseCallInFlight()
+    {
+        var (ledger, time) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 6000, 600);
+        return (ledger, time);
+    }
+
+    private static Task<ModelControlOutcome> ReconcileWithoutChange(InMemoryModelControlLedger ledger, bool completed) =>
+        completed
+            ? ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, WorstCaseUsage).AsTask()
+            : ledger.ReconcileAsync(Id(1), ReconciliationResolution.ChargeAsReserved).AsTask();
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_resolution_that_changes_no_charge_still_succeeds_with_valid_counters(bool completed)
+    {
+        var (ledger, _) = await AWorstCaseCallInFlight();
+        var day = ledger.Counter("day_2026-10-08");
+        var month = ledger.Counter("month_2026-10");
+
+        Assert.Equal(ModelControlOutcome.Applied, await ReconcileWithoutChange(ledger, completed));
+
+        Assert.Equal(day, ledger.Counter("day_2026-10-08")); // validated, not rewritten
+        Assert.Equal(month, ledger.Counter("month_2026-10"));
+        Assert.Equal(ReservationState.Settled, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(Worst, ledger.Reservation(Id(1))!.ChargedMicroUsd);
+        Assert.False(ledger.Reservation(Id(1))!.CallInFlight);
+        Assert.Equal(0, ledger.ActivePermits);
+    }
+
+    [Theory]
+    [InlineData(true, "day-missing")]
+    [InlineData(true, "month-missing")]
+    [InlineData(true, "day-negative")]
+    [InlineData(true, "month-negative")]
+    [InlineData(true, "day-other-period")]
+    [InlineData(true, "month-other-period")]
+    [InlineData(false, "day-missing")]
+    [InlineData(false, "month-missing")]
+    [InlineData(false, "day-negative")]
+    [InlineData(false, "month-negative")]
+    [InlineData(false, "day-other-period")]
+    [InlineData(false, "month-other-period")]
+    public async Task A_resolution_that_changes_no_charge_fails_closed_on_an_invalid_counter(bool completed, string defect)
+    {
+        // Reviewed defect: with the cost equal to the reservation, a missing unexpired daily counter
+        // or a negative monthly counter was ignored and the permit was released.
+        var (ledger, _) = await AWorstCaseCallInFlight();
+        var name = defect.StartsWith("day", StringComparison.Ordinal) ? "day_2026-10-08" : "month_2026-10";
+        var counter = ledger.Counter(name)!;
+        ledger.SetCounter(name, defect switch
+        {
+            "day-missing" or "month-missing" => null,
+            "day-negative" or "month-negative" => counter with { ChargedMicroUsd = -5 },
+            _ => counter with { Key = "2026-09" }
+        });
+        var day = ledger.Counter("day_2026-10-08");
+        var month = ledger.Counter("month_2026-10");
+        var reservation = ledger.Reservation(Id(1));
+
+        Assert.Equal(ModelControlOutcome.StateInvalid, await ReconcileWithoutChange(ledger, completed));
+
+        Assert.Equal(day, ledger.Counter("day_2026-10-08"));
+        Assert.Equal(month, ledger.Counter("month_2026-10"));
+        Assert.Equal(reservation, ledger.Reservation(Id(1)));
+        Assert.Equal(ReservationState.Active, ledger.Reservation(Id(1))!.State);
+        Assert.True(ledger.Reservation(Id(1))!.CallInFlight);
+        Assert.Contains(Id(1), ledger.Root!.Permits.Keys);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_resolution_that_changes_no_charge_skips_an_expired_counter_without_recreating_it(bool completed)
+    {
+        var (ledger, time) = await AWorstCaseCallInFlight();
+        time.SetUtcNow(LateNovember);
+        await ledger.TryReserveAsync(Id(2));
+        ledger.SetCounter("day_2026-10-08", null); // expired October 9 + 40 days
+        var month = ledger.Counter("month_2026-10");
+
+        Assert.Equal(ModelControlOutcome.Applied, await ReconcileWithoutChange(ledger, completed));
+
+        Assert.Null(ledger.Counter("day_2026-10-08"));
+        Assert.Equal(month, ledger.Counter("month_2026-10"));
+        Assert.Equal(Worst, ledger.DayCharged(LateNovember));
+        Assert.Equal(Worst, ledger.MonthCharged(LateNovember));
+        Assert.Equal(ReservationState.Settled, ledger.Reservation(Id(1))!.State);
+        Assert.Equal([Id(2)], ledger.Root!.Permits.Keys);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_resolution_that_changes_no_charge_fails_closed_on_a_corrupt_counter_beside_an_expired_one(bool completed)
+    {
+        var (ledger, time) = await AWorstCaseCallInFlight();
+        time.SetUtcNow(LateNovember);
+        await ledger.TryReserveAsync(Id(2));
+        ledger.SetCounter("day_2026-10-08", null);
+        ledger.SetCounter("month_2026-10", ledger.Counter("month_2026-10")! with { ChargedMicroUsd = -1 });
+
+        Assert.Equal(ModelControlOutcome.StateInvalid, await ReconcileWithoutChange(ledger, completed));
+
+        Assert.Null(ledger.Counter("day_2026-10-08"));
+        Assert.Equal(-1, ledger.Counter("month_2026-10")!.ChargedMicroUsd);
+        Assert.True(ledger.Reservation(Id(1))!.CallInFlight);
+        Assert.Contains(Id(1), ledger.Root!.Permits.Keys);
+    }
+
     [Fact]
     public async Task Unresolved_reservations_can_be_listed_without_content()
     {

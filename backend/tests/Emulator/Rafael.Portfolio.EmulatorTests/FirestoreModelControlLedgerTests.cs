@@ -889,6 +889,94 @@ public sealed class FirestoreModelControlLedgerTests(FirestoreEmulatorFixture em
         Assert.Equal("Uncertain", await h.Raw.State(Id(1)));
     }
 
+    // ------------------------------------- zero-delta reconciliation validates counters
+
+    // 6,000 input and 600 output tokens cost exactly the reserved worst case, so the charge does not change.
+    private static readonly ModelUsage WorstCaseUsage = new(6000, 600);
+
+    private async Task<(Harness H, FirestoreModelControlLedger Ledger)> AWorstCaseCallInFlight()
+    {
+        var (h, ledger) = await StartAsync();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 6000, 600);
+        return (h, ledger);
+    }
+
+    private static ValueTask<ModelControlOutcome> ReconcileWithoutChange(FirestoreModelControlLedger ledger, bool completed) =>
+        completed
+            ? ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, WorstCaseUsage)
+            : ledger.ReconcileAsync(Id(1), ReconciliationResolution.ChargeAsReserved);
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_resolution_that_changes_no_charge_still_succeeds_with_valid_counters(bool completed)
+    {
+        var (h, _) = await AWorstCaseCallInFlight();
+
+        Assert.Equal(ModelControlOutcome.Applied, await ReconcileWithoutChange(h.Replica(), completed));
+
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Day("2026-10-08")));
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Month("2026-10")));
+        Assert.Equal("Settled", await h.Raw.State(Id(1)));
+        Assert.Equal(0, await h.Raw.PermitCount());
+    }
+
+    [Theory]
+    [InlineData(true, "day-missing")]
+    [InlineData(true, "month-negative")]
+    [InlineData(true, "month-other-period")]
+    [InlineData(false, "day-missing")]
+    [InlineData(false, "month-negative")]
+    [InlineData(false, "month-other-period")]
+    public async Task A_resolution_that_changes_no_charge_fails_closed_on_an_invalid_counter(bool completed, string defect)
+    {
+        var (h, _) = await AWorstCaseCallInFlight();
+        switch (defect)
+        {
+            case "day-missing":
+                await h.Raw.Day("2026-10-08").DeleteAsync();
+                break;
+            case "month-negative":
+                await h.Raw.Month("2026-10").UpdateAsync("chargedMicroUsd", -5L);
+                break;
+            default:
+                await h.Raw.Month("2026-10").UpdateAsync("key", "2026-09");
+                break;
+        }
+
+        var day = await h.Raw.Fields(h.Raw.Day("2026-10-08"));
+        var month = await h.Raw.Fields(h.Raw.Month("2026-10"));
+        var reservation = await h.Raw.Fields(h.Raw.Reservation(Id(1)));
+
+        Assert.Equal(ModelControlOutcome.StateInvalid, await ReconcileWithoutChange(h.Replica(), completed));
+
+        Assert.Equal(day, await h.Raw.Fields(h.Raw.Day("2026-10-08")));
+        Assert.Equal(month, await h.Raw.Fields(h.Raw.Month("2026-10")));
+        Assert.Equal(reservation, await h.Raw.Fields(h.Raw.Reservation(Id(1))));
+        Assert.Equal("Active", await h.Raw.State(Id(1)));
+        Assert.Equal(1, await h.Raw.PermitCount());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_resolution_that_changes_no_charge_skips_an_expired_counter_without_recreating_it(bool completed)
+    {
+        var (h, ledger) = await AWorstCaseCallInFlight();
+        h.Clock.Now = new DateTimeOffset(2026, 11, 25, 12, 0, 0, TimeSpan.Zero);
+        Assert.True((await ledger.TryReserveAsync(Id(2))).Success);
+        await h.Raw.Day("2026-10-08").DeleteAsync(); // expired October 9 + 40 days
+
+        Assert.Equal(ModelControlOutcome.Applied, await ReconcileWithoutChange(h.Replica(), completed));
+
+        Assert.Null(await h.Raw.Fields(h.Raw.Day("2026-10-08")));
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Month("2026-10")));
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Day("2026-11-25")));
+        Assert.Equal("Settled", await h.Raw.State(Id(1)));
+        Assert.Equal(1, await h.Raw.PermitCount());
+    }
+
     [Fact]
     public async Task Cancelling_before_any_call_refunds_the_whole_reservation()
     {

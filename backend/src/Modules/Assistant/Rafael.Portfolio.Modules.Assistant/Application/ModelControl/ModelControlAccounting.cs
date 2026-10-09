@@ -559,13 +559,14 @@ internal static partial class ModelControlAccounting
                 return Outcome(ModelControlOutcome.InvalidState);
         }
 
-        // Each original period is judged on its own; nothing is written unless both are acceptable.
+        // Each original period is judged on its own, even when the charge does not change: a
+        // reservation is never resolved on top of counters that are missing, corrupt or for
+        // another period. Nothing is written unless both are acceptable.
         PeriodCounter? newDay = null;
         PeriodCounter? newMonth = null;
         var delta = newCharge - record.ChargedMicroUsd;
-        if (delta != 0 &&
-            (!TryAdjustCounter(day, record.DayKey, ModelControlPeriods.DayExpiry(record.DayKey), now, delta, out newDay) ||
-             !TryAdjustCounter(month, record.MonthKey, ModelControlPeriods.MonthExpiry(record.MonthKey), now, delta, out newMonth)))
+        if (!TryAdjustCounter(day, record.DayKey, ModelControlPeriods.DayExpiry(record.DayKey), now, delta, out newDay) ||
+            !TryAdjustCounter(month, record.MonthKey, ModelControlPeriods.MonthExpiry(record.MonthKey), now, delta, out newMonth))
         {
             return Outcome(ModelControlOutcome.StateInvalid);
         }
@@ -731,7 +732,8 @@ internal static partial class ModelControlAccounting
         return true;
     }
 
-    // Applies a signed charge change to ONE of a reservation's own counters. A counter that is
+    // Validates ONE of a reservation's own counters and applies a signed charge change to it (a
+    // zero change validates only and writes nothing). A counter that is
     // missing is acceptable only when its period has legitimately expired and been deleted: it is
     // skipped and never recreated. A missing counter that should still exist, a corrupt or
     // mismatched one, or a refund larger than the counter holds, is refused.
@@ -763,7 +765,7 @@ internal static partial class ModelControlAccounting
 
             updated = counter with { ChargedMicroUsd = counter.ChargedMicroUsd + delta };
         }
-        else
+        else if (delta > 0)
         {
             updated = counter with { ChargedMicroUsd = SaturatingAdd(counter.ChargedMicroUsd, delta) };
         }
