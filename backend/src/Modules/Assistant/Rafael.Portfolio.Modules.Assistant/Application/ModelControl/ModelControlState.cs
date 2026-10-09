@@ -46,10 +46,15 @@ public static class ReservationStates
 /// <summary>What an operator concluded after checking the provider side of an unresolved reservation.</summary>
 public enum ReconciliationResolution
 {
-    /// <summary>The provider call is confirmed never to have run: the whole charge is refunded.</summary>
+    /// <summary>
+    /// The PENDING call (started and not completed, or a turn that never started a call) is
+    /// confirmed never to have run. Usage already confirmed by earlier completed calls is kept
+    /// and priced; only the remainder is refunded, and the whole charge only when no call
+    /// completed.
+    /// </summary>
     NotDispatched,
 
-    /// <summary>The provider confirmed completion with these usage figures: the charge becomes their tariff cost.</summary>
+    /// <summary>The provider confirmed the pending call completed with these usage figures: added to earlier usage, the charge becomes its tariff cost.</summary>
     Completed,
 
     /// <summary>The usage cannot be established: the reserved charge is accepted as final.</summary>

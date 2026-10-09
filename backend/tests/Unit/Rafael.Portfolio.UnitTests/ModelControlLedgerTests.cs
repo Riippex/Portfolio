@@ -686,6 +686,193 @@ public sealed class ModelControlLedgerTests
         Assert.Equal(2, ledger.ActivePermits);
     }
 
+    // ------------------------------------------- reconciliation scope and independent periods
+
+    private static async Task<(InMemoryModelControlLedger Ledger, FakeTimeProvider Time)> ACompletedCallThenAnAbandonedOne()
+    {
+        var (ledger, time) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        await ledger.CompleteCallAsync(Id(1), new ModelUsage(1000, 100)); // 140 micro-USD confirmed
+        await ledger.TryBeginCallAsync(Id(1), 100, 10);
+        await ledger.AbandonAsync(Id(1)); // the second call may never have run
+        return (ledger, time);
+    }
+
+    [Fact]
+    public async Task Disowning_the_pending_call_keeps_and_prices_what_earlier_calls_confirmed()
+    {
+        // Reviewed defect: NotDispatched refunded the entire charge to zero despite 140 micro-USD
+        // of confirmed consumption by the first call.
+        var (ledger, _) = await ACompletedCallThenAnAbandonedOne();
+        await ledger.TryReserveAsync(Id(2)); // another turn, which reconciliation must not touch
+
+        Assert.Equal(ModelControlOutcome.Applied, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        var record = ledger.Reservation(Id(1))!;
+        Assert.Equal(ReservationState.Settled, record.State);
+        Assert.Equal(140, record.ChargedMicroUsd);
+        Assert.False(record.CallInFlight);
+        Assert.Equal(1000, record.InputTokensUsed);
+        Assert.Equal(100, record.OutputTokensUsed);
+        Assert.NotNull(record.ExpiresAt);
+        Assert.Equal(140 + Worst, ledger.DayCharged(Noon)); // conservation: only the unused remainder left
+        Assert.Equal(140 + Worst, ledger.MonthCharged(Noon));
+        Assert.DoesNotContain(Id(1), ledger.Root!.Permits.Keys);
+        Assert.Equal(1, ledger.ActivePermits);
+    }
+
+    [Fact]
+    public async Task Disowning_a_call_when_none_is_pending_but_earlier_calls_completed_is_refused()
+    {
+        var (ledger, _) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        await ledger.CompleteCallAsync(Id(1), new ModelUsage(1000, 100));
+        await ledger.AbandonAsync(Id(1)); // between calls: there is nothing pending to disown
+
+        Assert.Equal(ModelControlOutcome.InvalidState, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        Assert.Equal(ReservationState.Uncertain, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(Worst, ledger.DayCharged(Noon));
+        Assert.Equal(Worst, ledger.MonthCharged(Noon));
+        Assert.Equal(1, ledger.ActivePermits);
+        Assert.Equal(ModelControlOutcome.Applied, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.ChargeAsReserved));
+    }
+
+    [Fact]
+    public async Task Disowning_a_pending_call_needs_the_tariff_that_prices_the_retained_usage()
+    {
+        var (ledger, _) = await ACompletedCallThenAnAbandonedOne();
+        ledger.Policy = ModelControlFixtures.Policy(tariff: ModelControlFixtures.Tariff(version: "tariff-2"));
+
+        Assert.Equal(ModelControlOutcome.InvalidTariffOrPolicy, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        Assert.Equal(ReservationState.Uncertain, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(Worst, ledger.DayCharged(Noon));
+        Assert.Equal(1, ledger.ActivePermits);
+    }
+
+    [Theory]
+    [InlineData(1, 5L, 0L)] // usage recorded although no call completed
+    [InlineData(2, 0L, 0L)] // a call completed without any recorded usage
+    public async Task A_contradictory_record_is_never_refunded(int callsStarted, long inputUsed, long outputUsed)
+    {
+        var (ledger, _) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        ledger.SetReservation(ledger.Reservation(Id(1))! with
+        {
+            CallsStarted = callsStarted,
+            InputTokensUsed = inputUsed,
+            OutputTokensUsed = outputUsed
+        });
+
+        Assert.Equal(ModelControlOutcome.StateInvalid, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        Assert.Equal(Worst, ledger.DayCharged(Noon));
+        Assert.Equal(Worst, ledger.MonthCharged(Noon));
+        Assert.Equal(1, ledger.ActivePermits);
+    }
+
+    [Fact]
+    public async Task A_refund_larger_than_a_counter_holds_changes_nothing()
+    {
+        var (ledger, _) = await ACompletedCallThenAnAbandonedOne();
+        ledger.SetCounter("day_2026-10-08", ledger.Counter("day_2026-10-08")! with { ChargedMicroUsd = 5 });
+
+        Assert.Equal(ModelControlOutcome.StateInvalid, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        Assert.Equal(5, ledger.DayCharged(Noon));
+        Assert.Equal(Worst, ledger.MonthCharged(Noon));
+        Assert.Equal(ReservationState.Uncertain, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(1, ledger.ActivePermits);
+    }
+
+    private static readonly DateTimeOffset LateNovember = new(2026, 11, 25, 12, 0, 0, TimeSpan.Zero);
+
+    private static async Task<(InMemoryModelControlLedger Ledger, FakeTimeProvider Time)> AnOctoberCallReconciledInLateNovember()
+    {
+        var (ledger, time) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        time.SetUtcNow(LateNovember);
+        await ledger.TryReserveAsync(Id(2)); // creates the current November counters
+        ledger.SetCounter("day_2026-10-08", null); // legitimately expired and deleted (October 9 + 40 days)
+        return (ledger, time);
+    }
+
+    [Fact]
+    public async Task An_expired_day_counter_is_skipped_and_the_live_month_counter_is_still_reconciled()
+    {
+        // Reviewed defect: with only the daily counter gone, Completed returned StateInvalid and
+        // kept the permit.
+        var (ledger, _) = await AnOctoberCallReconciledInLateNovember();
+
+        Assert.Equal(ModelControlOutcome.Applied,
+            await ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, new ModelUsage(1000, 100)));
+
+        Assert.Equal(140, ledger.Counter("month_2026-10")!.ChargedMicroUsd); // 840 - 840 + 140
+        Assert.Null(ledger.Counter("day_2026-10-08")); // never recreated
+        Assert.Equal(Worst, ledger.DayCharged(LateNovember)); // current periods untouched
+        Assert.Equal(Worst, ledger.MonthCharged(LateNovember));
+        Assert.Equal(ReservationState.Settled, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(140, ledger.Reservation(Id(1))!.ChargedMicroUsd);
+        Assert.Equal([Id(2)], ledger.Root!.Permits.Keys);
+    }
+
+    [Fact]
+    public async Task Disowning_a_call_with_an_expired_day_counter_refunds_the_live_month_counter_only()
+    {
+        var (ledger, _) = await AnOctoberCallReconciledInLateNovember();
+
+        Assert.Equal(ModelControlOutcome.Applied, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        Assert.Equal(0, ledger.Counter("month_2026-10")!.ChargedMicroUsd);
+        Assert.Null(ledger.Counter("day_2026-10-08"));
+        Assert.Equal(Worst, ledger.DayCharged(LateNovember));
+        Assert.Equal(Worst, ledger.MonthCharged(LateNovember));
+        Assert.Equal(ReservationState.Cancelled, ledger.Reservation(Id(1))!.State);
+        Assert.Equal([Id(2)], ledger.Root!.Permits.Keys);
+    }
+
+    [Fact]
+    public async Task A_missing_counter_whose_period_has_not_expired_still_fails_closed_beside_an_expired_one()
+    {
+        var (ledger, time) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        time.SetUtcNow(new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero)); // day expires on November 18
+        ledger.SetCounter("day_2026-10-08", null);
+
+        Assert.Equal(ModelControlOutcome.StateInvalid,
+            await ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, new ModelUsage(1000, 100)));
+
+        Assert.Equal(Worst, ledger.Counter("month_2026-10")!.ChargedMicroUsd);
+        Assert.Equal(ReservationState.Active, ledger.Reservation(Id(1))!.State);
+        Assert.True(ledger.Reservation(Id(1))!.CallInFlight);
+        Assert.Equal(1, ledger.ActivePermits);
+    }
+
+    [Theory]
+    [InlineData(-5L, null)] // negative charge
+    [InlineData(0L, "2026-09")] // a counter of another period
+    public async Task A_corrupt_remaining_counter_fails_closed_beside_an_expired_one(long charged, string? key)
+    {
+        var (ledger, _) = await AnOctoberCallReconciledInLateNovember();
+        var month = ledger.Counter("month_2026-10")!;
+        ledger.SetCounter("month_2026-10", month with { ChargedMicroUsd = charged, Key = key ?? month.Key });
+
+        Assert.Equal(ModelControlOutcome.StateInvalid,
+            await ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, new ModelUsage(1000, 100)));
+
+        Assert.Equal(charged, ledger.Counter("month_2026-10")!.ChargedMicroUsd);
+        Assert.Null(ledger.Counter("day_2026-10-08"));
+        Assert.True(ledger.Reservation(Id(1))!.CallInFlight);
+        Assert.Contains(Id(1), ledger.Root!.Permits.Keys);
+        Assert.Equal(Worst, ledger.DayCharged(LateNovember));
+    }
+
     [Fact]
     public async Task Unresolved_reservations_can_be_listed_without_content()
     {

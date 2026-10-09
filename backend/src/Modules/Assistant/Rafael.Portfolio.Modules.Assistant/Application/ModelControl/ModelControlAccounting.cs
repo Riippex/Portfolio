@@ -491,8 +491,21 @@ internal static partial class ModelControlAccounting
     /// Resolves an unresolved reservation (Active or Uncertain) after an operator checked the
     /// provider side. This is the only way a permit held for an unresolved call is released and
     /// the only way an Uncertain charge changes. The adjustment is applied to the reservation's
-    /// OWN day and month counters; a counter that has already expired with its closed period is
-    /// skipped (it no longer affects any admission) while the reservation evidence is kept.
+    /// OWN day and month counters, each judged independently: a counter that is missing because
+    /// its closed period has already expired is skipped (it no longer affects any admission) and
+    /// never recreated, while the other counter is still adjusted. A missing counter whose period
+    /// has not expired, or a corrupt or mismatched one, changes nothing at all.
+    ///
+    /// Scope of each resolution:
+    /// <list type="bullet">
+    /// <item>NotDispatched concerns only the PENDING call (the one started and not completed, or
+    /// the reservation's never-started turn). Usage already confirmed by earlier completed calls
+    /// is never erased: it is retained and priced with the reservation's tariff, so only the
+    /// unused remainder is refunded. With no completed call the whole charge is refunded. It is
+    /// refused when there is no pending call to disown while earlier calls completed.</item>
+    /// <item>Completed adds the provider-confirmed usage of the pending call to earlier usage.</item>
+    /// <item>ChargeAsReserved accepts the reserved charge as final.</item>
+    /// </list>
     /// </summary>
     public static AccountingDecision Reconcile(
         ModelControlPolicy policy,
@@ -523,7 +536,12 @@ internal static partial class ModelControlAccounting
         switch (resolution)
         {
             case ReconciliationResolution.NotDispatched:
-                newCharge = 0;
+                var scoped = PriceRetainedUsage(policy, now, record, out newCharge);
+                if (scoped != ModelControlOutcome.Applied)
+                {
+                    return Outcome(scoped);
+                }
+
                 break;
             case ReconciliationResolution.ChargeAsReserved:
                 newCharge = record.ChargedMicroUsd;
@@ -541,16 +559,21 @@ internal static partial class ModelControlAccounting
                 return Outcome(ModelControlOutcome.InvalidState);
         }
 
+        // Each original period is judged on its own; nothing is written unless both are acceptable.
         PeriodCounter? newDay = null;
         PeriodCounter? newMonth = null;
-        var chargeChanges = newCharge != record.ChargedMicroUsd;
-        var expiredPeriods = day is null && month is null && CountersHaveExpired(record, now);
-        if (chargeChanges && !expiredPeriods && !TryReconcile(record, newCharge, day, month, out newDay, out newMonth))
+        var delta = newCharge - record.ChargedMicroUsd;
+        if (delta != 0 &&
+            (!TryAdjustCounter(day, record.DayKey, ModelControlPeriods.DayExpiry(record.DayKey), now, delta, out newDay) ||
+             !TryAdjustCounter(month, record.MonthKey, ModelControlPeriods.MonthExpiry(record.MonthKey), now, delta, out newMonth)))
         {
             return Outcome(ModelControlOutcome.StateInvalid);
         }
 
-        var state = resolution == ReconciliationResolution.NotDispatched ? ReservationState.Cancelled : ReservationState.Settled;
+        // Nothing was consumed only when the whole charge is refunded.
+        var state = newCharge == 0 && resolution == ReconciliationResolution.NotDispatched
+            ? ReservationState.Cancelled
+            : ReservationState.Settled;
         return new AccountingDecision(
             ModelControlOutcome.Applied,
             new LedgerWrites(
@@ -590,8 +613,42 @@ internal static partial class ModelControlAccounting
             : ModelControlOutcome.InvalidTariffOrPolicy;
     }
 
-    private static bool CountersHaveExpired(ReservationRecord record, DateTimeOffset now) =>
-        ModelControlPeriods.DayExpiry(record.DayKey) <= now && ModelControlPeriods.MonthExpiry(record.MonthKey) <= now;
+    // NotDispatched disowns only the pending call. What earlier completed calls already reported
+    // stays charged at the reservation's tariff; with none, the whole charge is refunded.
+    private static ModelControlOutcome PriceRetainedUsage(
+        ModelControlPolicy policy,
+        DateTimeOffset now,
+        ReservationRecord record,
+        out long charge)
+    {
+        charge = 0;
+        var completedCalls = record.CallsStarted - (record.CallInFlight ? 1 : 0);
+        var hasUsage = record.InputTokensUsed > 0 || record.OutputTokensUsed > 0;
+        if (completedCalls == 0)
+        {
+            // Usage without a completed call (or a call that cannot be told apart) is contradictory.
+            return hasUsage ? ModelControlOutcome.StateInvalid : ModelControlOutcome.Applied;
+        }
+
+        // Earlier calls completed, so there must be a pending call to disown and usage to keep.
+        if (!record.CallInFlight)
+        {
+            return ModelControlOutcome.InvalidState;
+        }
+
+        if (!hasUsage)
+        {
+            return ModelControlOutcome.StateInvalid;
+        }
+
+        var tariff = policy.Tariff;
+        return policy.TryValidate(now, out _) &&
+               tariff is not null &&
+               string.Equals(tariff.Version, record.TariffVersion, StringComparison.Ordinal) &&
+               tariff.TryCost(record.InputTokensUsed, record.OutputTokensUsed, out charge)
+            ? ModelControlOutcome.Applied
+            : ModelControlOutcome.InvalidTariffOrPolicy;
+    }
 
     // A resolved reservation keeps its evidence until its (state-aware) expiry; an unresolved
     // one has no expiry.
@@ -671,6 +728,46 @@ internal static partial class ModelControlAccounting
         }
 
         charged = counter.ChargedMicroUsd;
+        return true;
+    }
+
+    // Applies a signed charge change to ONE of a reservation's own counters. A counter that is
+    // missing is acceptable only when its period has legitimately expired and been deleted: it is
+    // skipped and never recreated. A missing counter that should still exist, a corrupt or
+    // mismatched one, or a refund larger than the counter holds, is refused.
+    private static bool TryAdjustCounter(
+        PeriodCounter? counter,
+        string key,
+        DateTimeOffset expiry,
+        DateTimeOffset now,
+        long delta,
+        out PeriodCounter? updated)
+    {
+        updated = null;
+        if (counter is null)
+        {
+            return expiry <= now;
+        }
+
+        if (!IsSane(counter) || !string.Equals(counter.Key, key, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (delta < 0)
+        {
+            if (counter.ChargedMicroUsd < -delta)
+            {
+                return false;
+            }
+
+            updated = counter with { ChargedMicroUsd = counter.ChargedMicroUsd + delta };
+        }
+        else
+        {
+            updated = counter with { ChargedMicroUsd = SaturatingAdd(counter.ChargedMicroUsd, delta) };
+        }
+
         return true;
     }
 

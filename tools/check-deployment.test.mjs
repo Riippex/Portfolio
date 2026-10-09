@@ -226,6 +226,9 @@ const cases = [
   ["runbook forgets explicit reconciliation", MODEL_CONTROL, replace(/ReconcileAsync/g, "AutoRelease"), "documentation"],
   ["runbook forgets that in-flight permits are held", MODEL_CONTROL, replace(/in\s+flight/gi, "pending"), "documentation"],
   ["runbook forgets the race-safe capacity rule", MODEL_CONTROL, replace(/ConcurrentChange/g, "Retry"), "documentation"],
+  ["runbook forgets the pending call scope", MODEL_CONTROL, replace(/pending\s+call/gi, "whole turn"), "documentation"],
+  ["runbook forgets that earlier usage is retained", MODEL_CONTROL, replace(/retained\s+and\s+priced/gi, "ignored"), "documentation"],
+  ["runbook forgets the independent counters", MODEL_CONTROL, replace(/judged\s+independently/gi, "treated together"), "documentation"],
   ["runbook forgets the exact schema version rule", MODEL_CONTROL, replace(/schemaVersion/g, "version"), "documentation"],
   ["infrastructure runbook forgets the shared database", RUNBOOK, replace(/deployment\/control-ledger/g, "deployment/other"), "documentation"],
 ];

@@ -113,8 +113,8 @@ Expiry depends on whether the obligation is resolved.
   month**, or 40 days after they were resolved if that is later, so a late reconciliation keeps
   its evidence for 40 days.
 * **Day and month counters expire 40 days after their period ends.** A closed period no longer
-  affects any admission. If a reservation is reconciled after its counters expired, the
-  reservation evidence is updated and the permit released without recreating a counter.
+  affects any admission. The two counters of a reservation expire at different times (the day
+  first, the month weeks later), so reconciliation judges each one on its own: see Recovery.
 
 Firestore TTL deletes asynchronously (typically within hours, not guaranteed), so correctness
 never depends on the physical deletion. `CleanupExpiredAsync` removes expired resolved metadata,
@@ -141,12 +141,26 @@ calls it.
   metadata only) or in the Firestore console (`model_control_reservations` with state `Active` or
   `Uncertain`). Ask whether the provider call really ran, using the provider's own usage records.
 * **Resolve each one** with `IModelControlRecovery.ReconcileAsync`, which also releases its
-  permit and adjusts only that reservation's **own** day and month counters:
-  * `NotDispatched`: the call is confirmed never to have run; the whole charge is refunded.
-  * `Completed` with the provider-confirmed usage of the call that was in flight; the charge
-    becomes its tariff cost (it can be higher than reserved).
+  permit and adjusts only that reservation's **own** day and month counters. Each resolution
+  concerns the **pending call** (the call that was started and not completed) and never erases
+  usage that earlier calls of the same turn already confirmed:
+  * `NotDispatched`: the pending call is confirmed never to have run. Usage already confirmed by
+    earlier completed calls is **retained and priced** with the reservation's tariff, so only the
+    unused remainder is refunded and the reservation is `Settled` at that price. When no call
+    completed, the whole charge is refunded and the reservation is `Cancelled`. It is refused
+    (nothing changes) when there is no pending call but earlier calls completed (use
+    `ChargeAsReserved`), when the stored usage contradicts the call counts, or when the retained
+    usage cannot be priced (missing or different tariff).
+  * `Completed` with the provider-confirmed usage of the pending call; it is added to earlier
+    usage and the charge becomes the tariff cost of the total (it can be higher than reserved).
   * `ChargeAsReserved`: the usage cannot be established; the reserved charge is accepted as final.
-  A resolved reservation cannot be reconciled again. The port has no host entry point yet, so
+  A resolved reservation cannot be reconciled again.
+  Each of the reservation's two counters is judged independently. A counter that is missing
+  because its period expired (day: 40 days after the day ends; month: 40 days after the month
+  ends) is skipped and never recreated, and the other counter is still adjusted. A counter that
+  is missing while its period is still live, corrupt, for another period, or too small to take a
+  refund, refuses the whole reconciliation with `StateInvalid`: no counter, reservation or permit
+  changes. Counters of the current period are never touched. The port has no host entry point yet, so
   until a maintenance tool exists the same steps are done by hand in the console: set the
   reservation's state, correct the counters by the same amount, remove its entry from the
   control document's `permits`, set its `expiresAt` per the retention rules, and advance `epoch`.

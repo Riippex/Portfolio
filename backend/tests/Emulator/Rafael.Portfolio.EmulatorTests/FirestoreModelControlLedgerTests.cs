@@ -784,6 +784,111 @@ public sealed class FirestoreModelControlLedgerTests(FirestoreEmulatorFixture em
         Assert.Equal([Id(3)], (await operatorLedger.ListUnresolvedAsync()).Select(u => u.Id));
     }
 
+    // ------------------------------------- reconciliation scope and independent periods
+
+    [Fact]
+    public async Task Disowning_the_pending_call_keeps_and_prices_what_earlier_calls_confirmed()
+    {
+        var (h, ledger) = await StartAsync();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        await ledger.CompleteCallAsync(Id(1), new ModelUsage(1000, 100));
+        await ledger.TryBeginCallAsync(Id(1), 100, 10);
+        await ledger.AbandonAsync(Id(1));
+        await ledger.TryReserveAsync(Id(2));
+
+        Assert.Equal(ModelControlOutcome.Applied, await h.Replica().ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        var stored = (await h.Raw.Fields(h.Raw.Reservation(Id(1))))!;
+        Assert.Equal("Settled", (string)stored["state"]);
+        Assert.Equal(140L, (long)stored["chargedMicroUsd"]);
+        Assert.False((bool)stored["callInFlight"]);
+        Assert.Contains("expiresAt", stored.Keys);
+        Assert.Equal(140 + Worst, await h.Raw.Charged(h.Raw.Day("2026-10-08")));
+        Assert.Equal(140 + Worst, await h.Raw.Charged(h.Raw.Month("2026-10")));
+        Assert.Equal(1, await h.Raw.PermitCount());
+    }
+
+    [Fact]
+    public async Task Disowning_a_call_when_none_is_pending_but_earlier_calls_completed_is_refused()
+    {
+        var (h, ledger) = await StartAsync();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        await ledger.CompleteCallAsync(Id(1), new ModelUsage(1000, 100));
+        await ledger.AbandonAsync(Id(1));
+
+        Assert.Equal(ModelControlOutcome.InvalidState, await h.Replica().ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        Assert.Equal("Uncertain", await h.Raw.State(Id(1)));
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Day("2026-10-08")));
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Month("2026-10")));
+        Assert.Equal(1, await h.Raw.PermitCount());
+        Assert.DoesNotContain("expiresAt", (await h.Raw.Fields(h.Raw.Reservation(Id(1))))!.Keys);
+    }
+
+    private async Task<(Harness H, FirestoreModelControlLedger Ledger)> AnOctoberCallInLateNovember()
+    {
+        var (h, ledger) = await StartAsync();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        h.Clock.Now = new DateTimeOffset(2026, 11, 25, 12, 0, 0, TimeSpan.Zero);
+        Assert.True((await ledger.TryReserveAsync(Id(2))).Success); // creates the current November counters
+        await h.Raw.Day("2026-10-08").DeleteAsync(); // expired October 9 + 40 days; October's month is not
+        return (h, ledger);
+    }
+
+    [Fact]
+    public async Task An_expired_day_counter_is_skipped_and_the_live_month_counter_is_still_reconciled()
+    {
+        var (h, _) = await AnOctoberCallInLateNovember();
+
+        Assert.Equal(ModelControlOutcome.Applied,
+            await h.Replica().ReconcileAsync(Id(1), ReconciliationResolution.Completed, new ModelUsage(1000, 100)));
+
+        Assert.Equal(140L, await h.Raw.Charged(h.Raw.Month("2026-10")));
+        Assert.Null(await h.Raw.Fields(h.Raw.Day("2026-10-08"))); // never recreated
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Day("2026-11-25"))); // current periods untouched
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Month("2026-11")));
+        Assert.Equal("Settled", await h.Raw.State(Id(1)));
+        Assert.Equal(1, await h.Raw.PermitCount());
+    }
+
+    [Fact]
+    public async Task Disowning_a_call_with_an_expired_day_counter_refunds_the_live_month_counter_only()
+    {
+        var (h, _) = await AnOctoberCallInLateNovember();
+
+        Assert.Equal(ModelControlOutcome.Applied, await h.Replica().ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        Assert.Equal(0L, await h.Raw.Charged(h.Raw.Month("2026-10")));
+        Assert.Null(await h.Raw.Fields(h.Raw.Day("2026-10-08")));
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Month("2026-11")));
+        Assert.Equal("Cancelled", await h.Raw.State(Id(1)));
+    }
+
+    [Fact]
+    public async Task A_missing_unexpired_or_corrupt_counter_fails_closed_without_mutation()
+    {
+        var (h, _) = await AnOctoberCallInLateNovember();
+
+        // The remaining October counter is corrupt: nothing is released or changed.
+        await h.Raw.Month("2026-10").UpdateAsync("chargedMicroUsd", -5L);
+        Assert.Equal(ModelControlOutcome.StateInvalid,
+            await h.Replica().ReconcileAsync(Id(1), ReconciliationResolution.Completed, new ModelUsage(1000, 100)));
+        Assert.Equal(-5L, await h.Raw.Charged(h.Raw.Month("2026-10")));
+        Assert.Null(await h.Raw.Fields(h.Raw.Day("2026-10-08")));
+        Assert.Equal(2, await h.Raw.PermitCount());
+        Assert.True((bool)(await h.Raw.Fields(h.Raw.Reservation(Id(1))))!["callInFlight"]);
+
+        // The month counter is gone while its period is still live: also fail closed.
+        await h.Raw.Month("2026-10").DeleteAsync();
+        Assert.Equal(ModelControlOutcome.StateInvalid, await h.Replica().ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+        Assert.Equal(2, await h.Raw.PermitCount());
+        Assert.Equal(Worst, await h.Raw.Charged(h.Raw.Day("2026-11-25")));
+        Assert.Equal("Uncertain", await h.Raw.State(Id(1)));
+    }
+
     [Fact]
     public async Task Cancelling_before_any_call_refunds_the_whole_reservation()
     {

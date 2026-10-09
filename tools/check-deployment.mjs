@@ -767,6 +767,9 @@ export function checkDeployment(files) {
     [/ReconcileAsync/, "the explicit reconciliation of unresolved calls"],
     [/in\s+flight/i, "that a permit with a call in flight is not released by a lease"],
     [/ConcurrentChange/, "race-safe capacity reconciliation"],
+    [/pending\s+call/i, "that reconciliation concerns only the pending call and keeps earlier confirmed usage"],
+    [/retained\s+and\s+priced/i, "that earlier confirmed usage is retained and priced"],
+    [/judged\s+independently/i, "that each counter of a reservation is judged independently"],
     [/schemaVersion/, "the exact schema version rule"],
   ]) {
     if (!needle.test(modelControl)) fail("documentation", `docs/runbooks/model-control.md must document ${why}`);
