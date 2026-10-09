@@ -173,6 +173,82 @@ public sealed class ProfileEvidenceAssistantTests
         Assert.Empty(response.Citations);
     }
 
+    [Theory]
+    [InlineData("Tell me about Vextis AI engineering")]
+    [InlineData("Tell me about Kinetiq V AI engineering")]
+    [InlineData("Explain the JobTY AI engineering vacancy matching")]
+    public async Task The_profile_filter_does_not_hide_a_named_pending_project(string message)
+    {
+        await using var host = CreateHost();
+        var service = host.Services.GetRequiredService<IAssistantService>();
+
+        var response = service.Chat(new AssistantChatRequest(message, "profile"));
+        Assert.Equal(AssistantGroundingStatus.NotDocumented, response.GroundingStatus);
+        Assert.Empty(response.Citations);
+
+        var events = await StreamAsync(service, message, "profile");
+        Assert.Equal(AssistantGroundingStatus.NotDocumented, events[0].GroundingStatus);
+        Assert.DoesNotContain(events, e => e.Citation is not null);
+        Assert.Contains(events, e => e.Type == "token");
+        Assert.True(events[^1].Done);
+    }
+
+    [Theory]
+    [InlineData("Tell me about Vextis AI engineering")]
+    [InlineData("Tell me about Kinetiq V AI engineering")]
+    [InlineData("Explain the JobTY AI engineering vacancy matching")]
+    public async Task The_profile_filter_does_not_hide_a_named_pending_project_over_http_chat_and_sse(string message)
+    {
+        await using var host = CreateHost();
+        using var client = host.CreateClient();
+
+        using var chat = await client.PostAsJsonAsync("/v1/assistant/chat", new { message, slug = "profile" });
+        Assert.Equal(HttpStatusCode.OK, chat.StatusCode);
+        var chatBody = await chat.Content.ReadAsStringAsync();
+        Assert.Contains("\"groundingStatus\":\"not_documented\"", chatBody);
+        Assert.Contains("\"citations\":[]", chatBody);
+
+        using var stream = await client.PostAsJsonAsync("/v1/assistant/chat/stream", new { message, slug = "profile" });
+        Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
+        var sse = await stream.Content.ReadAsStringAsync();
+        Assert.Contains("\"groundingStatus\":\"not_documented\"", sse);
+        Assert.DoesNotContain("event: citation", sse);
+        Assert.Contains("event: token", sse);
+        Assert.Contains("event: done", sse);
+    }
+
+    [Theory]
+    [InlineData("Does Rafael have studies at Universidad Manuela Beltran?", "claim-profile-04")]
+    [InlineData("Tell me about the AI Engineer role at Expinn", "claim-profile-05")]
+    public async Task The_profile_filter_still_answers_supported_questions_over_service_http_chat_and_sse(string message, string claimId)
+    {
+        await using var host = CreateHost();
+        var service = host.Services.GetRequiredService<IAssistantService>();
+
+        var response = service.Chat(new AssistantChatRequest(message, "profile"));
+        Assert.Equal(AssistantGroundingStatus.Grounded, response.GroundingStatus);
+        Assert.All(response.Citations, AssertProfileCitation);
+        Assert.Contains(response.Citations, c => c.Claims.Contains(claimId));
+
+        var events = await StreamAsync(service, message, "profile");
+        Assert.Equal(AssistantGroundingStatus.Grounded, events[0].GroundingStatus);
+        Assert.Contains(events.Where(e => e.Citation is not null), e => e.Citation!.Claims.Contains(claimId));
+
+        using var client = host.CreateClient();
+        using var chat = await client.PostAsJsonAsync("/v1/assistant/chat", new { message, slug = "profile" });
+        Assert.Equal(HttpStatusCode.OK, chat.StatusCode);
+        var chatBody = await chat.Content.ReadAsStringAsync();
+        Assert.Contains("\"groundingStatus\":\"grounded\"", chatBody);
+        Assert.Contains(claimId, chatBody);
+
+        using var stream = await client.PostAsJsonAsync("/v1/assistant/chat/stream", new { message, slug = "profile" });
+        Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
+        var sse = await stream.Content.ReadAsStringAsync();
+        Assert.Contains("event: citation", sse);
+        Assert.Contains(claimId, sse);
+        Assert.Contains("event: done", sse);
+    }
+
     [Fact]
     public async Task General_profile_questions_without_a_named_project_keep_their_verified_answer()
     {

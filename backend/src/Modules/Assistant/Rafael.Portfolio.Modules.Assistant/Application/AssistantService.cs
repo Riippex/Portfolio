@@ -121,6 +121,13 @@ public sealed class AssistantService : IAssistantService
 
     private List<AssistantEvidenceChunk> FindVerifiedChunks(AssistantChatRequest request)
     {
+        // Which subject the question names is decided over all evidence. The caller's slug filter
+        // only chooses the source of the answer, so it must not hide a named pending project and
+        // let a verified document stand in for it.
+        var subjectChunks = request.Slug is null
+            ? null
+            : _evidenceAdapter.SearchEvidence(request.Message, limit: CandidateLimit, slugFilter: null);
+
         var candidateChunks = _evidenceAdapter.SearchEvidence(
             request.Message,
             limit: CandidateLimit,
@@ -129,10 +136,11 @@ public sealed class AssistantService : IAssistantService
         // A question that names a subject with no verified evidence is undocumented. Generic words
         // it shares with other documents (for example "AI engineering") must not make unrelated
         // verified evidence stand in for the named subject.
-        if (candidateChunks.Any(chunk =>
+        var namedSubjects = subjectChunks ?? candidateChunks;
+        if (namedSubjects.Any(chunk =>
                 !IsVerified(chunk) &&
                 NamesSubject(request.Message, chunk) &&
-                !candidateChunks.Any(other => IsVerified(other) && string.Equals(other.Slug, chunk.Slug, StringComparison.Ordinal))))
+                !namedSubjects.Any(other => IsVerified(other) && string.Equals(other.Slug, chunk.Slug, StringComparison.Ordinal))))
         {
             return [];
         }
