@@ -1,43 +1,49 @@
 {
   "$schema": "./schema.json",
-  "version": "2026.10",
-  "lastUpdated": "2026-10-08",
+  "version": "2026.10.1",
+  "lastUpdated": "2026-10-09",
   "items": [
     {
       "id": "evidence-profile",
       "slug": "profile",
       "kind": "profile",
       "title": "Rafael Patiño",
-      "summary": "Software engineering student at Universidad Manuela Beltran and AI Engineer at Expinn Technology focusing on software engineering, AI engineering, and cloud fundamentals.",
+      "summary": "The owner-maintained public professional profile lists software engineering studies in progress at Universidad Manuela Beltran, an AI Engineer role announced publicly at Expinn, StaffHub in its experience section, and OCI and ONE training references.",
       "headline": "Software & AI Engineer",
       "focusAreas": [
         "Software engineering",
         "AI engineering",
         "Cloud fundamentals"
       ],
-      "version": "2026.10",
+      "version": "2026.10.1",
       "evidenceStatus": "verified",
       "sourceUrl": "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
       "documentPath": "docs/evidence/profile.md",
-      "lastReviewed": "2026-10-08",
+      "lastReviewed": "2026-10-09",
       "claims": [
         {
-          "claimId": "claim-profile-01",
-          "statement": "Focuses on software engineering, AI engineering, and cloud fundamentals (OCI/ONE).",
+          "claimId": "claim-profile-04",
+          "statement": "The owner-maintained public profile lists Software Engineering studies in progress at Universidad Manuela Beltran.",
           "status": "verified",
-          "citation": "docs/evidence/profile.md#focus-areas"
+          "citation": "docs/evidence/profile.md#studies"
         },
         {
-          "claimId": "claim-profile-02",
-          "statement": "Studies Software Engineering at Universidad Manuela Beltran and works as an AI Engineer at Expinn Technology.",
+          "claimId": "claim-profile-05",
+          "statement": "The owner-maintained public profile announces an AI Engineer role at Expinn.",
           "status": "verified",
-          "citation": "docs/evidence/profile.md#professional-context"
+          "citation": "docs/evidence/profile.md#experience"
         },
         {
-          "claimId": "claim-profile-03",
-          "statement": "Applies evidence-grounded software engineering principles with deterministic boundaries and transient session privacy.",
+          "claimId": "claim-profile-06",
+          "statement": "The owner-maintained public profile lists StaffHub in its experience section.",
           "status": "verified",
-          "citation": "docs/evidence/profile.md#engineering-principles"
+          "citation": "docs/evidence/profile.md#experience"
+        },
+        {
+          "claimId": "claim-profile-07",
+          "statement": "The owner-maintained public profile references OCI and ONE training.",
+          "status": "verified",
+          "citation": "docs/evidence/profile.md#training"
         }
       ]
     },

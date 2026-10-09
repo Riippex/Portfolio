@@ -50,12 +50,26 @@ public sealed class EvidenceIngestionTests
 
         var profile = source.GetEvidenceBySlug("profile");
         Assert.NotNull(profile);
-        var focusSection = Assert.Single(profile.Sections, s => s.Slug == "focus-areas");
-        Assert.Contains(focusSection.Claims, c => c.ClaimId == "claim-profile-01");
-        var contextSection = Assert.Single(profile.Sections, s => s.Slug == "professional-context");
-        Assert.Contains(contextSection.Claims, c => c.ClaimId == "claim-profile-02");
-        var principlesSection = Assert.Single(profile.Sections, s => s.Slug == "engineering-principles");
-        Assert.Contains(principlesSection.Claims, c => c.ClaimId == "claim-profile-03");
+        var studiesSection = Assert.Single(profile.Sections, s => s.Slug == "studies");
+        Assert.Equal(["claim-profile-04"], studiesSection.Claims.Select(c => c.ClaimId));
+        var experienceSection = Assert.Single(profile.Sections, s => s.Slug == "experience");
+        Assert.Equal(["claim-profile-05", "claim-profile-06"], experienceSection.Claims.Select(c => c.ClaimId));
+        var trainingSection = Assert.Single(profile.Sections, s => s.Slug == "training");
+        Assert.Equal(["claim-profile-07"], trainingSection.Claims.Select(c => c.ClaimId));
+
+        // The removed elaborations are not in any verified section, and their claim ids are retired.
+        Assert.DoesNotContain(profile.Sections, s => s.Slug is "focus-areas" or "professional-context" or "engineering-principles");
+        var allClaims = profile.Sections.SelectMany(s => s.Claims).Select(c => c.ClaimId).ToList();
+        Assert.DoesNotContain(allClaims, id => id is "claim-profile-01" or "claim-profile-02" or "claim-profile-03");
+        var allText = string.Join("\n", profile.Sections.Select(s => s.Content));
+        foreach (var removed in new[] { "prompt systems", "feature engineering", "serverless", "Deterministic boundaries", "Privacy by default", "Expinn Technology" })
+        {
+            Assert.DoesNotContain(removed, allText, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Version and review metadata move together between the document and the manifest.
+        Assert.Equal("2026.10.1", profile.Item.Version);
+        Assert.Equal(new DateOnly(2026, 10, 9), profile.Item.LastReviewed);
     }
 
     [Fact]

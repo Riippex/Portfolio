@@ -3,29 +3,27 @@
 - Identifier: `evidence-profile`
 - Kind: Profile
 - Status: `verified`
-- Version: `2026.10`
-- Last reviewed: 2026-10-08
+- Version: `2026.10.1`
+- Last reviewed: 2026-10-09
 - Canonical Source: https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz
 
 ## Summary
 
-Rafael Patiño is a software engineering student at Universidad Manuela Beltran and an AI Engineer at Expinn Technology, focusing on software engineering, AI engineering, and cloud fundamentals.
+Rafael Patiño's owner-maintained public professional profile lists software engineering studies in progress at Universidad Manuela Beltran, an AI Engineer role announced publicly at Expinn, StaffHub in its experience section, and OCI and ONE training references.
 
-## Focus areas
+## Studies
 
-1. **Software engineering:** Modern application architecture, backend API design, and modular software boundaries.
-2. **AI engineering:** Practical AI integration, prompt systems, and intelligent feature engineering.
-3. **Cloud fundamentals:** Infrastructure concepts, OCI/ONE cloud foundations, and serverless runtime boundaries.
+- **Universidad Manuela Beltran:** The public profile lists Software Engineering studies as in progress.
 
-## Professional context
+## Experience
 
-- **Software Engineering Studies:** Undergraduate studies at Universidad Manuela Beltran (in progress).
-- **AI Engineer at Expinn Technology:** Publicly announced role in AI software development and intelligent system features.
-- **StaffHub:** Listed professional profile project in public context.
-- **Cloud & AI Training:** OCI (Oracle Cloud Infrastructure) and ONE (Oracle Next Education) cloud training foundations.
+- **Expinn:** The public profile announces an AI Engineer role at Expinn.
+- **StaffHub:** The public profile lists StaffHub in its experience section.
 
-## Engineering principles
+## Training
 
-- **Evidence over claims:** Verified statements require linked, owner-approved public sources.
-- **Deterministic boundaries:** Safety guardrails and validation operate at process and transport boundaries.
-- **Privacy by default:** Session input is transient; zero cross-session transcript retention.
+- **OCI and ONE:** The public profile references OCI (Oracle Cloud Infrastructure) and ONE (Oracle Next Education) training.
+
+## Basis and limits
+
+Every statement in this record is attributed to the owner-maintained public professional profile linked above. This record does not independently verify that profile. It does not state that any role is current, give durations or dates, describe duties, technologies or outcomes of any role or of StaffHub, confirm a completed degree, or confirm a credential or certification. Project evidence remains pending.

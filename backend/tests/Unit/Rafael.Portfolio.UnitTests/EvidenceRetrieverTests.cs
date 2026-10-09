@@ -75,18 +75,19 @@ public sealed class EvidenceRetrieverTests
     }
 
     [Fact]
-    public void Retrieve_ranks_profile_focus_areas_first_for_focus_areas_query()
+    public void Retrieve_ranks_profile_studies_first_for_university_query()
     {
         var retriever = CreateRetriever();
-        var results = retriever.Retrieve("focus areas autonomous agents computer vision");
+        var results = retriever.Retrieve("studies at Universidad Manuela Beltran");
 
         Assert.NotEmpty(results);
         var top = results[0];
 
         Assert.Equal("profile", top.Slug);
-        Assert.Equal("focus-areas", top.SectionSlug);
+        Assert.Equal("studies", top.SectionSlug);
         Assert.Equal(EvidenceVisibility.Public, top.Visibility);
-        Assert.Contains(top.Claims, c => c.ClaimId == "claim-profile-01");
+        Assert.Contains(top.Claims, c => c.ClaimId == "claim-profile-04");
+        Assert.Contains("docs/evidence/profile.md#studies", top.Citations);
     }
 
     [Fact]

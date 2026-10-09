@@ -13,6 +13,11 @@ public sealed class AssistantService : IAssistantService
 
     private const string VerifiedEvidenceStatus = "verified";
 
+    // Wide enough that a document the question names is seen even when other documents share its
+    // generic words; at most VerifiedChunkLimit verified chunks are still used.
+    private const int CandidateLimit = 20;
+    private const int VerifiedChunkLimit = 5;
+
     private readonly IAssistantEvidenceAdapter _evidenceAdapter;
     private readonly IAssistantSynthesizer _synthesizer;
     private readonly IAssistantSafetyEvaluator _safetyEvaluator;
@@ -118,13 +123,59 @@ public sealed class AssistantService : IAssistantService
     {
         var candidateChunks = _evidenceAdapter.SearchEvidence(
             request.Message,
-            limit: 5,
+            limit: CandidateLimit,
             slugFilter: request.Slug);
 
+        // A question that names a subject with no verified evidence is undocumented. Generic words
+        // it shares with other documents (for example "AI engineering") must not make unrelated
+        // verified evidence stand in for the named subject.
+        if (candidateChunks.Any(chunk =>
+                !IsVerified(chunk) &&
+                NamesSubject(request.Message, chunk) &&
+                !candidateChunks.Any(other => IsVerified(other) && string.Equals(other.Slug, chunk.Slug, StringComparison.Ordinal))))
+        {
+            return [];
+        }
+
         return candidateChunks
-            .Where(chunk => chunk.Score > 0 &&
-                string.Equals(chunk.EvidenceStatus, VerifiedEvidenceStatus, StringComparison.OrdinalIgnoreCase))
+            .Where(chunk => chunk.Score > 0 && IsVerified(chunk))
+            .Take(VerifiedChunkLimit)
             .ToList();
+    }
+
+    private static bool IsVerified(AssistantEvidenceChunk chunk) =>
+        string.Equals(chunk.EvidenceStatus, VerifiedEvidenceStatus, StringComparison.OrdinalIgnoreCase);
+
+    // The whole title or slug of the document must appear in the question as a phrase of words,
+    // ignoring case and punctuation ("Kinetiq V", "kinetiq-v" and "KINETIQ V?" all name Kinetiq V).
+    private static bool NamesSubject(string message, AssistantEvidenceChunk chunk)
+    {
+        var words = $" {NormalizeWords(message)} ";
+        return ContainsPhrase(words, chunk.Title) || ContainsPhrase(words, chunk.Slug);
+    }
+
+    private static bool ContainsPhrase(string paddedWords, string name)
+    {
+        var phrase = NormalizeWords(name);
+        return phrase.Length > 0 && paddedWords.Contains($" {phrase} ", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeWords(string text)
+    {
+        var builder = new System.Text.StringBuilder(text.Length);
+        foreach (var character in text)
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                builder.Append(char.ToLowerInvariant(character));
+            }
+            else if (builder.Length > 0 && builder[^1] != ' ')
+            {
+                builder.Append(' ');
+            }
+        }
+
+        return builder.ToString().Trim();
     }
 
     private static void ValidateRequest(AssistantChatRequest request)
