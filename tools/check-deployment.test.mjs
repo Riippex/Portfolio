@@ -222,6 +222,11 @@ const cases = [
   ["runbook lets the emulator checks pass silently", MODEL_CONTROL, replace(/INCOMPLETE/g, "skipped"), "documentation"],
   ["runbook forgets that unknown outcomes stay charged", MODEL_CONTROL, replace(/Uncertain/g, "Unknown"), "documentation"],
   ["runbook forgets what is never stored", MODEL_CONTROL, replace(/IP address or country/gi, "visitor details"), "documentation"],
+  ["runbook lets unresolved reservations expire", MODEL_CONTROL, replace(/no expiry/gi, "a short expiry"), "documentation"],
+  ["runbook forgets explicit reconciliation", MODEL_CONTROL, replace(/ReconcileAsync/g, "AutoRelease"), "documentation"],
+  ["runbook forgets that in-flight permits are held", MODEL_CONTROL, replace(/in\s+flight/gi, "pending"), "documentation"],
+  ["runbook forgets the race-safe capacity rule", MODEL_CONTROL, replace(/ConcurrentChange/g, "Retry"), "documentation"],
+  ["runbook forgets the exact schema version rule", MODEL_CONTROL, replace(/schemaVersion/g, "version"), "documentation"],
   ["infrastructure runbook forgets the shared database", RUNBOOK, replace(/deployment\/control-ledger/g, "deployment/other"), "documentation"],
 ];
 

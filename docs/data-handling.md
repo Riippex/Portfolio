@@ -27,9 +27,11 @@ model work (see [model control](runbooks/model-control.md)).
 - Content: opaque reservation ids, UTC period keys, integer micro-USD and token counts, policy,
   tariff and model versions, states and timestamps. Never an IP address or country, prompt,
   answer, contact data, CV text, tool payload or transcript.
-- Retention: counters and reservation metadata expire 40 days after their accounting period
-  ends. Firestore TTL deletion is asynchronous; logical expiry does not wait for it, and active
-  uncertainty is never erased early.
+- Retention: day and month counters expire 40 days after their accounting period ends, and a
+  resolved reservation 40 days after its month ends (or after it was resolved, if later).
+  Unresolved reservations (active or uncertain) have no expiry and are never deleted by TTL or
+  cleanup until an explicit reconciliation resolves them. Firestore TTL deletion is
+  asynchronous; logical expiry does not wait for it.
 - Deletion: expiry and the backend's bounded cleanup. There is no per-visitor record to delete.
 - Logs: outcome codes and counts only.
 

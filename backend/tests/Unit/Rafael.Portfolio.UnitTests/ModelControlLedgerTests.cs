@@ -131,17 +131,36 @@ public sealed class ModelControlLedgerTests
     }
 
     [Fact]
-    public async Task Reservation_counters_and_metadata_expire_forty_days_after_their_period_ends()
+    public async Task Counters_expire_forty_days_after_their_period_and_resolved_reservations_never_before()
     {
-        var (ledger, _) = Create();
+        var (ledger, time) = Create();
         await ledger.TryReserveAsync(Id(1));
 
-        // Reservation on 2026-10-08: day ends 10-09, month ends 11-01.
+        // Reservation on 2026-10-08: the day ends 10-09 and the month ends 11-01.
         Assert.Equal(new DateTimeOffset(2026, 11, 18, 0, 0, 0, TimeSpan.Zero), ledger.Counter("day_2026-10-08")!.ExpiresAt);
         Assert.Equal(new DateTimeOffset(2026, 12, 11, 0, 0, 0, TimeSpan.Zero), ledger.Counter("month_2026-10")!.ExpiresAt);
+
+        // An unresolved reservation is evidence and has no expiry at all.
+        Assert.Null(ledger.Reservation(Id(1))!.ExpiresAt);
+
+        // Once resolved it expires 40 days after its month ended (not after its creation).
+        await ledger.CancelUndispatchedAsync(Id(1));
         Assert.Equal(new DateTimeOffset(2026, 12, 11, 0, 0, 0, TimeSpan.Zero), ledger.Reservation(Id(1))!.ExpiresAt);
-        // Not 40 days after creation.
         Assert.NotEqual(Noon.AddDays(40), ledger.Reservation(Id(1))!.ExpiresAt);
+
+        // A reservation resolved long after its period keeps its evidence 40 days after resolution.
+        await ledger.TryReserveAsync(Id(2));
+        time.Advance(TimeSpan.FromSeconds(1));
+        var late = new DateTimeOffset(2027, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        await ledger.AbandonAsync(Id(2));
+        var clock = new SettableClock(late);
+        var lateLedger = new InMemoryModelControlLedger(ModelControlFixtures.Policy(), clock);
+        lateLedger.Root = ledger.Root;
+        lateLedger.SetReservation(ledger.Reservation(Id(2))!);
+        lateLedger.SetCounter("day_2026-10-08", ledger.Counter("day_2026-10-08"));
+        lateLedger.SetCounter("month_2026-10", ledger.Counter("month_2026-10"));
+        Assert.Equal(ModelControlOutcome.Applied, await lateLedger.ReconcileAsync(Id(2), ReconciliationResolution.ChargeAsReserved));
+        Assert.Equal(late.AddDays(40), lateLedger.Reservation(Id(2))!.ExpiresAt);
     }
 
     // ----------------------------------------------------------------------- settlement and periods
@@ -385,7 +404,8 @@ public sealed class ModelControlLedgerTests
         var actual = 9_000 + 3_600; // ceil(90000*0.1) + ceil(9000*0.4)
         Assert.Equal(actual, ledger.DayCharged(Noon));
         Assert.Equal(actual, ledger.MonthCharged(Noon));
-        Assert.Equal(ReservationState.Uncertain, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(ReservationState.Settled, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(actual, ledger.Reservation(Id(1))!.ChargedMicroUsd);
         Assert.Equal(ModelControlOutcome.InvalidState, await ledger.SettleAsync(Id(1)));
         Assert.Equal(ModelCallDenialReason.NotActive, (await ledger.TryBeginCallAsync(Id(1), 10, 10)).DenialReason);
     }
@@ -403,7 +423,7 @@ public sealed class ModelControlLedgerTests
 
         Assert.Equal(ModelControlOutcome.AllowanceExceeded, outcome);
         Assert.True(ledger.DayCharged(Noon) >= Worst);
-        Assert.Equal(ReservationState.Uncertain, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(ReservationState.Settled, ledger.Reservation(Id(1))!.State);
     }
 
     [Fact]
@@ -419,7 +439,7 @@ public sealed class ModelControlLedgerTests
     // ------------------------------------------------------------- uncertain outcomes and permits
 
     [Fact]
-    public async Task Abandoning_keeps_the_charge_and_holds_the_permit_until_the_lease_ends()
+    public async Task Abandoning_keeps_the_charge_and_holds_the_permit_regardless_of_time()
     {
         var (ledger, time) = Create();
         await ledger.TryReserveAsync(Id(1));
@@ -430,8 +450,9 @@ public sealed class ModelControlLedgerTests
         Assert.Equal(Worst, ledger.DayCharged(Noon));
         Assert.Equal(1, ledger.ActivePermits);
         Assert.Equal(ReservationState.Uncertain, ledger.Reservation(Id(1))!.State);
+        Assert.True(ledger.Reservation(Id(1))!.CallInFlight);
 
-        // A caller timeout or disconnect does not free the permit: two abandoned turns block a third.
+        // A caller timeout or disconnect is not a lease end, and a lease end is not completion.
         await ledger.TryReserveAsync(Id(2));
         await ledger.AbandonAsync(Id(2));
         time.Advance(TimeSpan.FromMinutes(1));
@@ -439,24 +460,91 @@ public sealed class ModelControlLedgerTests
     }
 
     [Fact]
-    public async Task An_expired_lease_frees_the_permit_but_never_the_charge()
+    public async Task Two_started_calls_keep_their_permits_after_the_lease_and_no_third_turn_is_admitted()
+    {
+        // Reviewed defect: after six minutes a third reservation and call were allowed while two
+        // dispatched calls were still marked in flight.
+        var (ledger, time) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryReserveAsync(Id(2));
+        Assert.True((await ledger.TryBeginCallAsync(Id(1), 1000, 100)).Allowed);
+        Assert.True((await ledger.TryBeginCallAsync(Id(2), 1000, 100)).Allowed);
+
+        time.Advance(TimeSpan.FromMinutes(6));
+        var third = await ledger.TryReserveAsync(Id(3));
+
+        Assert.False(third.Success);
+        Assert.Equal(ModelReservationDenialReason.ConcurrencyLimitReached, third.DenialReason);
+        Assert.Equal(2, ledger.ActivePermits);
+        Assert.True(ledger.Reservation(Id(1))!.CallInFlight);
+        Assert.True(ledger.Reservation(Id(2))!.CallInFlight);
+        Assert.Equal(2 * Worst, ledger.DayCharged(Noon));
+        Assert.Equal(0, ledger.ReservationCount - 2);
+
+        // Waiting longer changes nothing: only an explicit reconciliation releases them.
+        time.Advance(TimeSpan.FromHours(6));
+        Assert.Equal(ModelReservationDenialReason.ConcurrencyLimitReached, (await ledger.TryReserveAsync(Id(3))).DenialReason);
+        Assert.Equal(2, ledger.ActivePermits);
+    }
+
+    [Fact]
+    public async Task A_next_reservation_marks_unresolved_calls_uncertain_without_freeing_or_refunding()
     {
         var (ledger, time) = Create();
         await ledger.TryReserveAsync(Id(1));
         await ledger.TryBeginCallAsync(Id(1), 1000, 100);
         await ledger.TryReserveAsync(Id(2));
-        await ledger.AbandonAsync(Id(2));
+        await ledger.TryBeginCallAsync(Id(2), 1000, 100);
+        await ledger.CompleteCallAsync(Id(2), new ModelUsage(1000, 100)); // call finished, turn not settled
+
+        time.Advance(TimeSpan.FromMinutes(6));
+        var next = await ledger.TryReserveAsync(Id(3));
+
+        // Id(2) had no call in flight, so nothing can still be running for it: its permit is freed.
+        Assert.True(next.Success);
+        Assert.Equal(ReservationState.Uncertain, ledger.Reservation(Id(1))!.State);
+        Assert.True(ledger.Reservation(Id(1))!.CallInFlight);
+        Assert.Equal(ReservationState.Lapsed, ledger.Reservation(Id(2))!.State);
+        Assert.Equal(Worst, ledger.Reservation(Id(2))!.ChargedMicroUsd); // never refunded
+        Assert.Equal(3 * Worst, ledger.DayCharged(Noon));
+        Assert.Equal(2, ledger.ActivePermits); // Id(1) stays held, plus the new turn
+        Assert.Contains(Id(1), ledger.Root!.Permits.Keys);
+        Assert.Equal(ModelControlOutcome.InvalidState, await ledger.SettleAsync(Id(1)));
+    }
+
+    [Fact]
+    public async Task A_reservation_that_never_dispatched_lapses_and_frees_its_permit_with_the_charge_kept()
+    {
+        var (ledger, time) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryReserveAsync(Id(2));
 
         time.Advance(ModelControlPolicy.ApprovedPermitLease + TimeSpan.FromSeconds(1));
         var next = await ledger.TryReserveAsync(Id(3));
 
         Assert.True(next.Success);
-        Assert.Equal(1, ledger.ActivePermits); // only the new turn
-        Assert.Equal(ReservationState.Uncertain, ledger.Reservation(Id(1))!.State);
-        Assert.Equal(ReservationState.Uncertain, ledger.Reservation(Id(2))!.State);
+        Assert.Equal(ReservationState.Lapsed, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(ReservationState.Lapsed, ledger.Reservation(Id(2))!.State);
+        Assert.NotNull(ledger.Reservation(Id(1))!.ExpiresAt);
+        Assert.Equal(1, ledger.ActivePermits);
         Assert.Equal(3 * Worst, ledger.DayCharged(Noon));
         Assert.Equal(ModelControlOutcome.InvalidState, await ledger.SettleAsync(Id(1)));
-        Assert.Equal(3 * Worst, ledger.DayCharged(Noon));
+        Assert.Equal(ModelCallDenialReason.NotActive, (await ledger.TryBeginCallAsync(Id(1), 10, 10)).DenialReason);
+    }
+
+    [Fact]
+    public async Task A_permit_whose_reservation_is_missing_or_unreadable_stays_held()
+    {
+        var (ledger, time) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryReserveAsync(Id(2));
+        ledger.SetReservation(ledger.Reservation(Id(1))! with { ReservedMicroUsd = -1 }); // corrupt
+        ledger.RemoveReservation(Id(2)); // lost
+
+        time.Advance(TimeSpan.FromHours(1));
+
+        Assert.Equal(ModelReservationDenialReason.ConcurrencyLimitReached, (await ledger.TryReserveAsync(Id(3))).DenialReason);
+        Assert.Equal(2, ledger.ActivePermits);
     }
 
     [Fact]
@@ -470,6 +558,169 @@ public sealed class ModelControlLedgerTests
         Assert.Equal(ModelCallDenialReason.PermitLost, (await ledger.TryBeginCallAsync(Id(1), 10, 10)).DenialReason);
         Assert.Equal(ModelControlOutcome.InvalidState, await ledger.SettleAsync(Id(1)));
         Assert.Equal(Worst, ledger.DayCharged(Noon));
+    }
+
+    // ------------------------------------------------------------------ explicit reconciliation
+
+    private static async Task<(InMemoryModelControlLedger Ledger, FakeTimeProvider Time)> TwoStuckCalls()
+    {
+        var (ledger, time) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryReserveAsync(Id(2));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        await ledger.TryBeginCallAsync(Id(2), 1000, 100);
+        time.Advance(TimeSpan.FromMinutes(6));
+        return (ledger, time);
+    }
+
+    [Fact]
+    public async Task Confirming_a_call_never_ran_refunds_it_and_releases_its_permit()
+    {
+        var (ledger, _) = await TwoStuckCalls();
+
+        Assert.Equal(ModelControlOutcome.Applied, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        Assert.Equal(ReservationState.Cancelled, ledger.Reservation(Id(1))!.State);
+        Assert.False(ledger.Reservation(Id(1))!.CallInFlight);
+        Assert.Equal(0, ledger.Reservation(Id(1))!.ChargedMicroUsd);
+        Assert.Equal(Worst, ledger.DayCharged(Noon)); // only Id(2) remains charged
+        Assert.Equal(1, ledger.ActivePermits);
+        Assert.True((await ledger.TryReserveAsync(Id(3))).Success); // now, and only now, a permit is free
+    }
+
+    [Fact]
+    public async Task Confirming_completion_charges_the_confirmed_usage_in_the_original_period()
+    {
+        var (ledger, time) = Create(start: new DateTimeOffset(2026, 10, 8, 23, 58, 0, TimeSpan.Zero));
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 1000, 100);
+        time.Advance(TimeSpan.FromHours(3)); // the next UTC day
+        await ledger.TryReserveAsync(Id(2));
+        await ledger.AbandonAsync(Id(1));
+
+        Assert.Equal(ModelControlOutcome.Applied,
+            await ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, new ModelUsage(1000, 100)));
+
+        Assert.Equal(140, ledger.DayCharged(time.GetUtcNow().AddDays(-1)));
+        Assert.Equal(Worst, ledger.DayCharged(time.GetUtcNow())); // today untouched
+        Assert.Equal(ReservationState.Settled, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(140, ledger.Reservation(Id(1))!.ChargedMicroUsd);
+        Assert.DoesNotContain(Id(1), ledger.Root!.Permits.Keys);
+    }
+
+    [Fact]
+    public async Task Accepting_the_charge_as_reserved_releases_the_permit_without_changing_any_counter()
+    {
+        var (ledger, _) = await TwoStuckCalls();
+
+        Assert.Equal(ModelControlOutcome.Applied, await ledger.ReconcileAsync(Id(2), ReconciliationResolution.ChargeAsReserved));
+
+        Assert.Equal(2 * Worst, ledger.DayCharged(Noon));
+        Assert.Equal(ReservationState.Settled, ledger.Reservation(Id(2))!.State);
+        Assert.Equal(1, ledger.ActivePermits);
+    }
+
+    [Fact]
+    public async Task Reconciliation_refuses_invalid_input_and_resolved_reservations()
+    {
+        var (ledger, _) = await TwoStuckCalls();
+
+        Assert.Equal(ModelControlOutcome.InvalidUsage, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, null));
+        Assert.Equal(ModelControlOutcome.InvalidUsage, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, new ModelUsage(-1, 5)));
+        Assert.Equal(ModelControlOutcome.InvalidUsage, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, new ModelUsage(0, 5)));
+        Assert.Equal(ModelControlOutcome.NotFound, await ledger.ReconcileAsync(Id(9), ReconciliationResolution.ChargeAsReserved));
+        Assert.Equal(ModelControlOutcome.InvalidState, await ledger.ReconcileAsync(Id(1), (ReconciliationResolution)99));
+        Assert.Equal(2 * Worst, ledger.DayCharged(Noon));
+        Assert.Equal(2, ledger.ActivePermits);
+
+        Assert.Equal(ModelControlOutcome.Applied, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.ChargeAsReserved));
+        Assert.Equal(ModelControlOutcome.InvalidState, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+        Assert.Equal(Worst + Worst, ledger.DayCharged(Noon)); // the second call cannot refund a settled one
+    }
+
+    [Fact]
+    public async Task Confirmed_completion_needs_a_call_in_flight_and_a_matching_tariff()
+    {
+        var (ledger, _) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.AbandonAsync(Id(1)); // no call ever began
+
+        Assert.Equal(ModelControlOutcome.InvalidState,
+            await ledger.ReconcileAsync(Id(1), ReconciliationResolution.Completed, new ModelUsage(10, 10)));
+
+        await ledger.TryReserveAsync(Id(2));
+        await ledger.TryBeginCallAsync(Id(2), 100, 10);
+        ledger.Policy = ModelControlFixtures.Policy(tariff: ModelControlFixtures.Tariff(version: "tariff-2"));
+        Assert.Equal(ModelControlOutcome.InvalidTariffOrPolicy,
+            await ledger.ReconcileAsync(Id(2), ReconciliationResolution.Completed, new ModelUsage(10, 10)));
+        Assert.Equal(2 * Worst, ledger.DayCharged(Noon));
+    }
+
+    [Fact]
+    public async Task Reconciliation_of_a_closed_period_whose_counters_expired_keeps_the_evidence_and_frees_the_permit()
+    {
+        var clock = new SettableClock(Noon);
+        var ledger = new InMemoryModelControlLedger(ModelControlFixtures.Policy(), clock);
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryBeginCallAsync(Id(1), 100, 10);
+
+        clock.Now = new DateTimeOffset(2027, 3, 1, 0, 0, 0, TimeSpan.Zero); // both periods long expired
+        ledger.SetCounter("day_2026-10-08", null);
+        ledger.SetCounter("month_2026-10", null);
+
+        Assert.Equal(ModelControlOutcome.Applied, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+        Assert.Equal(ReservationState.Cancelled, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(0, ledger.ActivePermits);
+        Assert.Null(ledger.Counter("day_2026-10-08"));
+    }
+
+    [Fact]
+    public async Task Reconciliation_with_a_missing_counter_in_a_live_period_changes_nothing()
+    {
+        var (ledger, _) = await TwoStuckCalls();
+        ledger.SetCounter("month_2026-10", null);
+
+        Assert.Equal(ModelControlOutcome.StateInvalid, await ledger.ReconcileAsync(Id(1), ReconciliationResolution.NotDispatched));
+
+        Assert.Equal(ReservationState.Active, ledger.Reservation(Id(1))!.State);
+        Assert.Equal(2, ledger.ActivePermits);
+    }
+
+    [Fact]
+    public async Task Unresolved_reservations_can_be_listed_without_content()
+    {
+        var (ledger, _) = await TwoStuckCalls();
+        await ledger.ReconcileAsync(Id(1), ReconciliationResolution.ChargeAsReserved);
+
+        var unresolved = await ledger.ListUnresolvedAsync();
+
+        var only = Assert.Single(unresolved);
+        Assert.Equal(Id(2), only.Id);
+        Assert.True(only.CallInFlight);
+        Assert.Equal(Worst, only.ChargedMicroUsd);
+    }
+
+    [Fact]
+    public async Task Every_admission_advances_the_epoch_and_a_saturated_epoch_denies()
+    {
+        var (ledger, _) = Create();
+        await ledger.TryReserveAsync(Id(1));
+        await ledger.TryReserveAsync(Id(2));
+        Assert.Equal(2, ledger.Root!.Epoch);
+
+        ledger.Root = ledger.Root with { Epoch = long.MaxValue };
+        Assert.Equal(ModelReservationDenialReason.StateInvalid, (await ledger.TryReserveAsync(Id(3))).DenialReason);
+        ledger.Root = ledger.Root with { Epoch = -1 };
+        Assert.Equal(ModelReservationDenialReason.StateInvalid, (await ledger.TryReserveAsync(Id(3))).DenialReason);
+    }
+
+    [Fact]
+    public async Task Resolved_and_unresolved_reservations_both_count_toward_capacity()
+    {
+        var (ledger, _) = await TwoStuckCalls();
+        await ledger.ReconcileAsync(Id(1), ReconciliationResolution.ChargeAsReserved);
+
+        Assert.Equal(2, ledger.Root!.LiveReservations);
     }
 
     // ------------------------------------------------------------------------- duplicate IDs

@@ -8,7 +8,7 @@ namespace Rafael.Portfolio.UnitTests;
 /// state. It is not part of the production assembly and proves nothing about Firestore
 /// concurrency; the emulator tests do that.
 /// </summary>
-internal sealed class InMemoryModelControlLedger : IModelControlLedger
+internal sealed class InMemoryModelControlLedger : IModelControlLedger, IModelControlRecovery
 {
     private readonly Lock _lock = new();
     private readonly TimeProvider _time;
@@ -65,6 +65,14 @@ internal sealed class InMemoryModelControlLedger : IModelControlLedger
         lock (_lock)
         {
             _reservations[record.Id] = record;
+        }
+    }
+
+    public void RemoveReservation(string id)
+    {
+        lock (_lock)
+        {
+            _reservations.Remove(id);
         }
     }
 
@@ -146,6 +154,43 @@ internal sealed class InMemoryModelControlLedger : IModelControlLedger
 
     public ValueTask<ModelControlOutcome> AbandonAsync(string reservationId, CancellationToken cancellationToken = default) =>
         Mutate(reservationId, (now, record, _, _) => ModelControlAccounting.Abandon(now, record));
+
+    public ValueTask<ModelControlOutcome> ReconcileAsync(
+        string reservationId,
+        ReconciliationResolution resolution,
+        ModelUsage? confirmedUsage = null,
+        CancellationToken cancellationToken = default) =>
+        Mutate(reservationId, (now, record, day, month) =>
+            ModelControlAccounting.Reconcile(Policy, now, Root, record, day, month, resolution, confirmedUsage));
+
+    public ValueTask<IReadOnlyList<UnresolvedReservation>> ListUnresolvedAsync(int maxItems = 50, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            IReadOnlyList<UnresolvedReservation> list = _reservations.Values
+                .Where(record => !ReservationStates.IsResolved(record.State))
+                .Take(maxItems)
+                .Select(record => new UnresolvedReservation(
+                    record.Id, record.State, record.DayKey, record.MonthKey, record.CallsStarted, record.CallInFlight,
+                    record.ReservedMicroUsd, record.ChargedMicroUsd, record.UpdatedAt))
+                .ToList();
+            return ValueTask.FromResult(list);
+        }
+    }
+
+    public ValueTask<CapacityReconciliation> ReconcileCapacityAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (Root is null || !ModelControlAccounting.IsSane(Root))
+            {
+                return ValueTask.FromResult(CapacityReconciliation.StateInvalid);
+            }
+
+            Root = Root with { LiveReservations = _reservations.Count, Epoch = Root.Epoch + 1 };
+            return ValueTask.FromResult(CapacityReconciliation.Applied);
+        }
+    }
 
     private ValueTask<ModelControlOutcome> Mutate(
         string reservationId,

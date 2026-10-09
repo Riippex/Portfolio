@@ -71,7 +71,8 @@ internal static partial class ModelControlAccounting
             return Deny(ModelReservationDenialReason.StoreNotInitialized);
         }
 
-        if (!IsSane(root))
+        // A saturated epoch could no longer be advanced, so it is treated as corrupt.
+        if (!IsSane(root) || root.Epoch == long.MaxValue)
         {
             return Deny(ModelReservationDenialReason.StateInvalid);
         }
@@ -95,8 +96,12 @@ internal static partial class ModelControlAccounting
             return Deny(ModelReservationDenialReason.StateInvalid);
         }
 
-        // Permits whose lease ended are reclaimed, and their reservation becomes Uncertain:
-        // the permit is freed, the charge is not.
+        // A lease that ended is NOT proof that the provider finished: a remote call can outlive
+        // its caller. So an ended lease frees a permit only when nothing can still be running
+        // for it (no call in flight). A permit whose reservation has a call in flight, or whose
+        // reservation cannot be found or read, stays held and the reservation becomes
+        // Uncertain; only an explicit reconciliation (Reconcile) releases it. The charge is
+        // never touched here.
         var permits = new Dictionary<string, DateTimeOffset>(root.Permits, StringComparer.Ordinal);
         var reclaimed = new List<ReservationRecord>();
         foreach (var (holderId, leaseEnd) in root.Permits)
@@ -106,17 +111,34 @@ internal static partial class ModelControlAccounting
                 continue;
             }
 
-            permits.Remove(holderId);
-            if (permitHolders.TryGetValue(holderId, out var holder) && holder is { State: ReservationState.Active })
+            if (!permitHolders.TryGetValue(holderId, out var holder) || holder is null || !IsSane(holder))
             {
-                reclaimed.Add(holder with { State = ReservationState.Uncertain, UpdatedAt = now });
+                continue; // unknown or unreadable: fail closed, keep the permit
+            }
+
+            if (holder.CallInFlight)
+            {
+                if (holder.State == ReservationState.Active)
+                {
+                    reclaimed.Add(holder with { State = ReservationState.Uncertain, UpdatedAt = now });
+                }
+
+                continue;
+            }
+
+            permits.Remove(holderId);
+            if (holder.State == ReservationState.Active)
+            {
+                reclaimed.Add(Resolve(holder, ReservationState.Lapsed, holder.ChargedMicroUsd, now));
             }
         }
 
         if (permits.Count >= policy.MaxActivePermits)
         {
-            var soonest = permits.Values.Min() - now;
-            return Deny(ModelReservationDenialReason.ConcurrencyLimitReached, Clamp(soonest, TimeSpan.FromSeconds(1)));
+            // Only a live lease ends on its own; permits held for unresolved calls wait for reconciliation.
+            var live = permits.Values.Where(lease => lease > now).ToList();
+            var wait = live.Count > 0 ? live.Min() - now : TimeSpan.FromMinutes(5);
+            return Deny(ModelReservationDenialReason.ConcurrencyLimitReached, Clamp(wait, TimeSpan.FromSeconds(1)));
         }
 
         if (root.LiveReservations >= policy.MaxLiveReservations)
@@ -167,7 +189,7 @@ internal static partial class ModelControlAccounting
             PendingOutputTokens: 0,
             now,
             now,
-            ModelControlPeriods.MonthExpiry(monthKey));
+            ExpiresAt: null);
 
         return new ReserveDecision(
             null,
@@ -178,7 +200,8 @@ internal static partial class ModelControlAccounting
                     LastDayKey = dayKey,
                     LastMonthKey = monthKey,
                     Permits = permits,
-                    LiveReservations = root.LiveReservations + 1
+                    LiveReservations = root.LiveReservations + 1,
+                    Epoch = root.Epoch + 1
                 },
                 new PeriodCounter(dayKey, dayCharged + worstCase, ModelControlPeriods.DayExpiry(dayKey)),
                 new PeriodCounter(monthKey, monthCharged + worstCase, ModelControlPeriods.MonthExpiry(monthKey)),
@@ -320,6 +343,8 @@ internal static partial class ModelControlAccounting
         // less than reserved), and freeze the reservation so nothing can be refunded.
         var exceeded = completed with { State = ReservationState.Uncertain };
         var tariff = policy.Tariff;
+        // Without a price or readable counters the charge cannot be finalized: the reservation
+        // stays Uncertain and unresolved. With them it is settled at its larger actual cost.
         if (!policy.TryValidate(now, out _) ||
             tariff is null ||
             !string.Equals(tariff.Version, record.TariffVersion, StringComparison.Ordinal) ||
@@ -330,7 +355,9 @@ internal static partial class ModelControlAccounting
 
         if (actual <= record.ChargedMicroUsd)
         {
-            return new AccountingDecision(ModelControlOutcome.AllowanceExceeded, new LedgerWrites(Reservation: exceeded));
+            return new AccountingDecision(
+                ModelControlOutcome.AllowanceExceeded,
+                new LedgerWrites(Reservation: Resolve(completed, ReservationState.Settled, record.ChargedMicroUsd, now)));
         }
 
         var extra = actual - record.ChargedMicroUsd;
@@ -345,7 +372,7 @@ internal static partial class ModelControlAccounting
             new LedgerWrites(
                 Day: day with { ChargedMicroUsd = SaturatingAdd(day.ChargedMicroUsd, extra) },
                 Month: month with { ChargedMicroUsd = SaturatingAdd(month.ChargedMicroUsd, extra) },
-                Reservation: exceeded with { ChargedMicroUsd = actual }));
+                Reservation: Resolve(completed, ReservationState.Settled, actual, now)));
     }
 
     // --------------------------------------------------------------------------------------- settle
@@ -386,10 +413,10 @@ internal static partial class ModelControlAccounting
                 ModelControlOutcome.InvalidTariffOrPolicy,
                 new LedgerWrites(
                     Root: root with { Permits = permits },
-                    Reservation: record with { State = ReservationState.Settled, UpdatedAt = now }));
+                    Reservation: Resolve(record, ReservationState.Settled, record.ChargedMicroUsd, now)));
         }
 
-        var settled = record with { State = ReservationState.Settled, ChargedMicroUsd = actual, UpdatedAt = now };
+        var settled = Resolve(record, ReservationState.Settled, actual, now);
         if (!TryReconcile(record, actual, day, month, out var newDay, out var newMonth))
         {
             return Outcome(ModelControlOutcome.StateInvalid);
@@ -435,7 +462,7 @@ internal static partial class ModelControlAccounting
                 root with { Permits = WithoutPermit(root, record.Id) },
                 newDay,
                 newMonth,
-                record with { State = ReservationState.Cancelled, ChargedMicroUsd = 0, UpdatedAt = now }));
+                Resolve(record, ReservationState.Cancelled, 0, now)));
     }
 
     public static AccountingDecision Abandon(DateTimeOffset now, ReservationRecord? record)
@@ -458,6 +485,125 @@ internal static partial class ModelControlAccounting
         };
     }
 
+    // ----------------------------------------------------------------------------- reconciliation
+
+    /// <summary>
+    /// Resolves an unresolved reservation (Active or Uncertain) after an operator checked the
+    /// provider side. This is the only way a permit held for an unresolved call is released and
+    /// the only way an Uncertain charge changes. The adjustment is applied to the reservation's
+    /// OWN day and month counters; a counter that has already expired with its closed period is
+    /// skipped (it no longer affects any admission) while the reservation evidence is kept.
+    /// </summary>
+    public static AccountingDecision Reconcile(
+        ModelControlPolicy policy,
+        DateTimeOffset now,
+        LedgerRoot? root,
+        ReservationRecord? record,
+        PeriodCounter? day,
+        PeriodCounter? month,
+        ReconciliationResolution resolution,
+        ModelUsage? confirmedUsage)
+    {
+        if (record is null)
+        {
+            return Outcome(ModelControlOutcome.NotFound);
+        }
+
+        if (root is null || !IsSane(root) || !IsSane(record))
+        {
+            return Outcome(ModelControlOutcome.StateInvalid);
+        }
+
+        if (ReservationStates.IsResolved(record.State))
+        {
+            return Outcome(ModelControlOutcome.InvalidState);
+        }
+
+        long newCharge;
+        switch (resolution)
+        {
+            case ReconciliationResolution.NotDispatched:
+                newCharge = 0;
+                break;
+            case ReconciliationResolution.ChargeAsReserved:
+                newCharge = record.ChargedMicroUsd;
+                break;
+            case ReconciliationResolution.Completed:
+                var priced = PriceConfirmedUsage(policy, now, record, confirmedUsage, out newCharge);
+                if (priced != ModelControlOutcome.Applied)
+                {
+                    return Outcome(priced);
+                }
+
+                break;
+
+            default:
+                return Outcome(ModelControlOutcome.InvalidState);
+        }
+
+        PeriodCounter? newDay = null;
+        PeriodCounter? newMonth = null;
+        var chargeChanges = newCharge != record.ChargedMicroUsd;
+        var expiredPeriods = day is null && month is null && CountersHaveExpired(record, now);
+        if (chargeChanges && !expiredPeriods && !TryReconcile(record, newCharge, day, month, out newDay, out newMonth))
+        {
+            return Outcome(ModelControlOutcome.StateInvalid);
+        }
+
+        var state = resolution == ReconciliationResolution.NotDispatched ? ReservationState.Cancelled : ReservationState.Settled;
+        return new AccountingDecision(
+            ModelControlOutcome.Applied,
+            new LedgerWrites(
+                root with { Permits = WithoutPermit(root, record.Id) },
+                newDay,
+                newMonth,
+                Resolve(record with { CallInFlight = false, PendingInputTokens = 0, PendingOutputTokens = 0 }, state, newCharge, now)));
+    }
+
+    // The confirmed figures are the usage of the one call that was in flight; they are added to
+    // what earlier calls already reported and priced with the reservation's own tariff.
+    private static ModelControlOutcome PriceConfirmedUsage(
+        ModelControlPolicy policy,
+        DateTimeOffset now,
+        ReservationRecord record,
+        ModelUsage? confirmedUsage,
+        out long charge)
+    {
+        charge = 0;
+        if (!record.CallInFlight)
+        {
+            return ModelControlOutcome.InvalidState;
+        }
+
+        if (confirmedUsage is not { } usage || usage.InputTokens < 1 || usage.OutputTokens < 0 ||
+            usage.InputTokens > MaxReportedTokens || usage.OutputTokens > MaxReportedTokens)
+        {
+            return ModelControlOutcome.InvalidUsage;
+        }
+
+        var tariff = policy.Tariff;
+        return policy.TryValidate(now, out _) &&
+               tariff is not null &&
+               string.Equals(tariff.Version, record.TariffVersion, StringComparison.Ordinal) &&
+               tariff.TryCost(record.InputTokensUsed + usage.InputTokens, record.OutputTokensUsed + usage.OutputTokens, out charge)
+            ? ModelControlOutcome.Applied
+            : ModelControlOutcome.InvalidTariffOrPolicy;
+    }
+
+    private static bool CountersHaveExpired(ReservationRecord record, DateTimeOffset now) =>
+        ModelControlPeriods.DayExpiry(record.DayKey) <= now && ModelControlPeriods.MonthExpiry(record.MonthKey) <= now;
+
+    // A resolved reservation keeps its evidence until its (state-aware) expiry; an unresolved
+    // one has no expiry.
+    private static ReservationRecord Resolve(ReservationRecord record, ReservationState state, long charged, DateTimeOffset now) =>
+        record with
+        {
+            State = state,
+            ChargedMicroUsd = charged,
+            UpdatedAt = now,
+            ExpiresAt = ModelControlPeriods.ResolvedExpiry(record.MonthKey, now)
+        };
+
     // -------------------------------------------------------------------------------------- sanity
 
     public static bool IsSane(LedgerRoot? root) =>
@@ -467,6 +613,7 @@ internal static partial class ModelControlAccounting
         (root.LastDayKey.Length == 0 || ModelControlPeriods.IsDayKey(root.LastDayKey)) &&
         (root.LastMonthKey.Length == 0 || ModelControlPeriods.IsMonthKey(root.LastMonthKey)) &&
         root.LiveReservations >= 0 &&
+        root.Epoch >= 0 &&
         root.Permits.Count <= ModelControlPolicy.ApprovedMaxActivePermits &&
         root.Permits.Keys.All(IsValidReservationId);
 
@@ -488,7 +635,8 @@ internal static partial class ModelControlAccounting
         record.InputTokensUsed is >= 0 and <= MaxReportedTokens * 4 &&
         record.OutputTokensUsed is >= 0 and <= MaxReportedTokens * 4 &&
         record.PendingInputTokens >= 0 && record.PendingOutputTokens >= 0 &&
-        (record.CallInFlight || (record.PendingInputTokens == 0 && record.PendingOutputTokens == 0));
+        (record.CallInFlight || (record.PendingInputTokens == 0 && record.PendingOutputTokens == 0)) &&
+        ReservationStates.IsResolved(record.State) == record.ExpiresAt.HasValue;
 
     // --------------------------------------------------------------------------------------- helpers
 

@@ -1,5 +1,6 @@
 using Google.Cloud.Firestore;
 using Rafael.Portfolio.Modules.Assistant.Application;
+using static Rafael.Portfolio.Modules.Assistant.Infrastructure.FirestoreDocuments;
 
 namespace Rafael.Portfolio.Modules.Assistant.Infrastructure;
 
@@ -17,7 +18,7 @@ namespace Rafael.Portfolio.Modules.Assistant.Infrastructure;
 /// payload or transcript. Any failure (outage, contention beyond the retry bound, missing or
 /// corrupt state) denies; nothing here falls back to a fresh allowance.
 /// </remarks>
-public sealed class FirestoreModelControlLedger : IModelControlLedger
+public sealed class FirestoreModelControlLedger : IModelControlLedger, IModelControlRecovery
 {
     public const string ControlCollection = "model_control";
     public const string ControlDocument = "state";
@@ -32,6 +33,7 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger
     private readonly ModelControlPolicy _policy;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _operationTimeout;
+    private readonly Func<CancellationToken, Task>? _afterCapacityCount;
     private readonly Lock _denialLock = new();
     private (ModelReservationDenialReason Reason, TimeSpan? RetryAfter, DateTimeOffset Until)? _recentDenial;
 
@@ -39,8 +41,9 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger
         FirestoreDb db,
         ModelControlPolicy policy,
         TimeProvider? timeProvider = null,
-        TimeSpan? operationTimeout = null)
-        : this(new Lazy<FirestoreDb>(db ?? throw new ArgumentNullException(nameof(db))), policy, timeProvider, operationTimeout)
+        TimeSpan? operationTimeout = null,
+        Func<CancellationToken, Task>? afterCapacityCount = null)
+        : this(new Lazy<FirestoreDb>(db ?? throw new ArgumentNullException(nameof(db))), policy, timeProvider, operationTimeout, afterCapacityCount)
     {
     }
 
@@ -52,8 +55,12 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger
         Lazy<FirestoreDb> db,
         ModelControlPolicy policy,
         TimeProvider? timeProvider = null,
-        TimeSpan? operationTimeout = null)
+        TimeSpan? operationTimeout = null,
+        Func<CancellationToken, Task>? afterCapacityCount = null)
     {
+        // The hook runs between counting and the guarded write of ReconcileCapacityAsync. It exists
+        // so a test can interleave an admission at exactly that point; production passes null.
+        _afterCapacityCount = afterCapacityCount;
         _operationTimeout = operationTimeout is { } timeout && timeout > TimeSpan.Zero ? timeout : DefaultOperationTimeout;
         _lazyDb = db ?? throw new ArgumentNullException(nameof(db));
         _policy = policy ?? throw new ArgumentNullException(nameof(policy));
@@ -357,12 +364,13 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger
         }
     }
 
-    // ----------------------------------------------------------------------------- cleanup / reconcile
+    // ------------------------------------------------------------------------------- cleanup
 
     /// <summary>
-    /// Deletes reservation and counter metadata whose retention (40 days after its period ended)
-    /// has passed, and lowers the live-reservation count to match. Reservations that are still
-    /// Active are never removed. Safe to call at any time; bounded by <paramref name="maxDocuments"/>.
+    /// Deletes RESOLVED reservation metadata and counters whose retention has passed, and lowers
+    /// the live count to match. A reservation that is Active or Uncertain, or that does not
+    /// validate, is evidence of an unresolved obligation and is never deleted here, even if it
+    /// somehow carries an expiry. Bounded by <paramref name="maxDocuments"/>.
     /// </summary>
     public async Task<int> CleanupExpiredAsync(int maxDocuments = 50, CancellationToken callerToken = default)
     {
@@ -373,7 +381,8 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger
         {
             var deletedReservations = await _db.RunTransactionAsync(async tx =>
             {
-                var cutoff = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+                var now = _timeProvider.GetUtcNow();
+                var cutoff = Timestamp.FromDateTimeOffset(now);
                 var expired = await tx.GetSnapshotAsync(
                     _db.Collection(ReservationsCollection).WhereLessThanOrEqualTo("expiresAt", cutoff).Limit(limit),
                     cancellationToken);
@@ -382,8 +391,9 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger
                 var removable = new List<DocumentReference>();
                 foreach (var document in expired.Documents)
                 {
-                    var record = ParseReservation(document);
-                    if (record.State != ReservationState.Active)
+                    if (TryParseReservation(document) is { } record &&
+                        ReservationStates.IsResolved(record.State) &&
+                        record.ExpiresAt is { } expiry && expiry <= now)
                     {
                         removable.Add(document.Reference);
                     }
@@ -394,9 +404,13 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger
                     tx.Delete(reference);
                 }
 
-                if (removable.Count > 0 && root is not null && ModelControlAccounting.IsSane(root))
+                if (removable.Count > 0 && root is not null && ModelControlAccounting.IsSane(root) && root.Epoch < long.MaxValue)
                 {
-                    tx.Set(RootRef, ToFields(root with { LiveReservations = Math.Max(0, root.LiveReservations - removable.Count) }));
+                    tx.Set(RootRef, ToFields(root with
+                    {
+                        LiveReservations = Math.Max(0, root.LiveReservations - removable.Count),
+                        Epoch = root.Epoch + 1
+                    }));
                 }
 
                 return removable.Count;
@@ -424,36 +438,94 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger
         }
     }
 
+    // ------------------------------------------------------------------------------- recovery
+
+    public async ValueTask<IReadOnlyList<UnresolvedReservation>> ListUnresolvedAsync(
+        int maxItems = 50,
+        CancellationToken callerToken = default)
+    {
+        using var bounded = Bounded(callerToken);
+        var snapshot = await _db.Collection(ReservationsCollection)
+            .WhereIn("state", new object[] { nameof(ReservationState.Active), nameof(ReservationState.Uncertain) })
+            .Limit(Math.Clamp(maxItems, 1, 200))
+            .GetSnapshotAsync(bounded.Token);
+
+        return snapshot.Documents
+            .Select(TryParseReservation)
+            .OfType<ReservationRecord>()
+            .Select(record => new UnresolvedReservation(
+                record.Id, record.State, record.DayKey, record.MonthKey, record.CallsStarted, record.CallInFlight,
+                record.ReservedMicroUsd, record.ChargedMicroUsd, record.UpdatedAt))
+            .ToList();
+    }
+
+    public ValueTask<ModelControlOutcome> ReconcileAsync(
+        string reservationId,
+        ReconciliationResolution resolution,
+        ModelUsage? confirmedUsage = null,
+        CancellationToken cancellationToken = default) =>
+        MutateAsync(reservationId, needsRoot: true, cancellationToken, (now, root, record, day, month) =>
+            ModelControlAccounting.Reconcile(_policy, now, root, record, day, month, resolution, confirmedUsage));
+
     /// <summary>
-    /// Brings the live-reservation count in line with the collection after asynchronous TTL
-    /// deletion. The count is only ever set from an observed total, so a stale value can make
-    /// capacity tighter, never looser than reality; a reservation created during the count can
-    /// be missed by at most the permit limit.
+    /// Sets the live-reservation count from an observed total after asynchronous TTL deletions.
+    /// The count is taken outside a transaction, so it can be stale by the time it is written; the
+    /// control document therefore carries an epoch that every admission and every cleanup
+    /// advances, and the write happens only if the epoch and count are exactly what they were
+    /// before counting. Otherwise nothing is written (ConcurrentChange) and the caller retries.
+    /// A deletion that happens while counting can only make the observed total too high, which
+    /// is the safe direction.
     /// </summary>
-    public async Task<bool> ReconcileCapacityAsync(CancellationToken callerToken = default)
+    public async ValueTask<CapacityReconciliation> ReconcileCapacityAsync(CancellationToken callerToken = default)
     {
         using var bounded = Bounded(callerToken);
         var cancellationToken = bounded.Token;
         try
         {
+            var snapshot = await RootRef.GetSnapshotAsync(cancellationToken);
+            if (!snapshot.Exists)
+            {
+                return CapacityReconciliation.StateInvalid;
+            }
+
+            var before = ParseRoot(snapshot.ToDictionary());
+            if (!ModelControlAccounting.IsSane(before) || before.Epoch == long.MaxValue)
+            {
+                return CapacityReconciliation.StateInvalid;
+            }
+
             var counted = await _db.Collection(ReservationsCollection).Count().GetSnapshotAsync(cancellationToken);
             var observed = (int)Math.Min(counted.Count ?? int.MaxValue, int.MaxValue);
+
+            if (_afterCapacityCount is not null)
+            {
+                await _afterCapacityCount(cancellationToken);
+            }
 
             return await _db.RunTransactionAsync(async tx =>
             {
                 var root = await ReadRootAsync(tx, cancellationToken);
                 if (root is null || !ModelControlAccounting.IsSane(root))
                 {
-                    return false;
+                    return CapacityReconciliation.StateInvalid;
                 }
 
-                tx.Set(RootRef, ToFields(root with { LiveReservations = observed }));
-                return true;
+                if (root.Epoch != before.Epoch || root.LiveReservations != before.LiveReservations)
+                {
+                    return CapacityReconciliation.ConcurrentChange;
+                }
+
+                tx.Set(RootRef, ToFields(root with { LiveReservations = observed, Epoch = root.Epoch + 1 }));
+                return CapacityReconciliation.Applied;
             }, Options, cancellationToken);
+        }
+        catch (StoredStateInvalidException)
+        {
+            return CapacityReconciliation.StateInvalid;
         }
         catch (Exception) when (!callerToken.IsCancellationRequested)
         {
-            return false;
+            return CapacityReconciliation.StoreUnavailable;
         }
     }
 
@@ -497,147 +569,33 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger
         }
     }
 
-    private sealed class StoredStateInvalidException(string message) : Exception(message);
-
-    private static Dictionary<string, object> ToFields(LedgerRoot root) => new()
-    {
-        ["schemaVersion"] = root.SchemaVersion,
-        ["policyVersion"] = root.PolicyVersion,
-        ["lastDayKey"] = root.LastDayKey,
-        ["lastMonthKey"] = root.LastMonthKey,
-        ["permits"] = root.Permits.ToDictionary(p => p.Key, p => (object)Timestamp.FromDateTimeOffset(p.Value)),
-        ["liveReservations"] = root.LiveReservations
-    };
-
-    private static Dictionary<string, object> ToFields(PeriodCounter counter, string kind) => new()
-    {
-        ["schemaVersion"] = LedgerRoot.CurrentSchemaVersion,
-        ["kind"] = kind,
-        ["key"] = counter.Key,
-        ["chargedMicroUsd"] = counter.ChargedMicroUsd,
-        ["expiresAt"] = Timestamp.FromDateTimeOffset(counter.ExpiresAt)
-    };
-
-    private static Dictionary<string, object> ToFields(ReservationRecord record) => new()
-    {
-        ["schemaVersion"] = LedgerRoot.CurrentSchemaVersion,
-        ["id"] = record.Id,
-        ["state"] = record.State.ToString(),
-        ["policyVersion"] = record.PolicyVersion,
-        ["tariffVersion"] = record.TariffVersion,
-        ["modelId"] = record.ModelId,
-        ["dayKey"] = record.DayKey,
-        ["monthKey"] = record.MonthKey,
-        ["reservedMicroUsd"] = record.ReservedMicroUsd,
-        ["chargedMicroUsd"] = record.ChargedMicroUsd,
-        ["maxCalls"] = record.MaxCalls,
-        ["maxInputTokens"] = record.MaxInputTokens,
-        ["maxOutputTokens"] = record.MaxOutputTokens,
-        ["callsStarted"] = record.CallsStarted,
-        ["inputTokensUsed"] = record.InputTokensUsed,
-        ["outputTokensUsed"] = record.OutputTokensUsed,
-        ["callInFlight"] = record.CallInFlight,
-        ["pendingInputTokens"] = record.PendingInputTokens,
-        ["pendingOutputTokens"] = record.PendingOutputTokens,
-        ["createdAt"] = Timestamp.FromDateTimeOffset(record.CreatedAt),
-        ["updatedAt"] = Timestamp.FromDateTimeOffset(record.UpdatedAt),
-        ["expiresAt"] = Timestamp.FromDateTimeOffset(record.ExpiresAt)
-    };
-
     private async Task<LedgerRoot?> ReadRootAsync(Transaction tx, CancellationToken cancellationToken)
     {
         var snapshot = await tx.GetSnapshotAsync(RootRef, cancellationToken);
-        if (!snapshot.Exists)
-        {
-            return null;
-        }
-
-        var fields = snapshot.ToDictionary();
-        var permits = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
-        foreach (var (id, value) in Field<IDictionary<string, object>>(fields, "permits"))
-        {
-            permits[id] = value is Timestamp timestamp
-                ? timestamp.ToDateTimeOffset()
-                : throw new StoredStateInvalidException("A permit lease is not a timestamp.");
-        }
-
-        return new LedgerRoot(
-            (int)Field<long>(fields, "schemaVersion"),
-            Field<string>(fields, "policyVersion"),
-            Field<string>(fields, "lastDayKey"),
-            Field<string>(fields, "lastMonthKey"),
-            permits,
-            (int)Math.Clamp(Field<long>(fields, "liveReservations"), int.MinValue, int.MaxValue));
+        return snapshot.Exists ? ParseRoot(snapshot.ToDictionary()) : null;
     }
 
     private async Task<PeriodCounter?> ReadCounterAsync(Transaction tx, DocumentReference reference, string kind, CancellationToken cancellationToken)
     {
         var snapshot = await tx.GetSnapshotAsync(reference, cancellationToken);
-        if (!snapshot.Exists)
-        {
-            return null;
-        }
-
-        var fields = snapshot.ToDictionary();
-        if (!string.Equals(Field<string>(fields, "kind"), kind, StringComparison.Ordinal))
-        {
-            throw new StoredStateInvalidException("A period counter has the wrong kind.");
-        }
-
-        return new PeriodCounter(
-            Field<string>(fields, "key"),
-            Field<long>(fields, "chargedMicroUsd"),
-            Field<Timestamp>(fields, "expiresAt").ToDateTimeOffset());
+        return snapshot.Exists ? ParseCounter(snapshot.ToDictionary(), kind) : null;
     }
 
     private async Task<ReservationRecord?> ReadReservationAsync(Transaction tx, string id, CancellationToken cancellationToken)
     {
         var snapshot = await tx.GetSnapshotAsync(ReservationRef(id), cancellationToken);
-        return snapshot.Exists ? ParseReservation(snapshot) : null;
+        return snapshot.Exists ? ParseReservation(snapshot.Id, snapshot.ToDictionary()) : null;
     }
 
-    private static ReservationRecord ParseReservation(DocumentSnapshot snapshot)
+    private static ReservationRecord? TryParseReservation(DocumentSnapshot snapshot)
     {
-        var fields = snapshot.ToDictionary();
-        if (!Enum.TryParse<ReservationState>(Field<string>(fields, "state"), ignoreCase: false, out var state) ||
-            !Enum.IsDefined(state))
+        try
         {
-            throw new StoredStateInvalidException("A reservation has an unknown state.");
+            return ParseReservation(snapshot.Id, snapshot.ToDictionary());
         }
-
-        var record = new ReservationRecord(
-            Field<string>(fields, "id"),
-            state,
-            Field<string>(fields, "policyVersion"),
-            Field<string>(fields, "tariffVersion"),
-            Field<string>(fields, "modelId"),
-            Field<string>(fields, "dayKey"),
-            Field<string>(fields, "monthKey"),
-            Field<long>(fields, "reservedMicroUsd"),
-            Field<long>(fields, "chargedMicroUsd"),
-            (int)Math.Clamp(Field<long>(fields, "maxCalls"), int.MinValue, int.MaxValue),
-            (int)Math.Clamp(Field<long>(fields, "maxInputTokens"), int.MinValue, int.MaxValue),
-            (int)Math.Clamp(Field<long>(fields, "maxOutputTokens"), int.MinValue, int.MaxValue),
-            (int)Math.Clamp(Field<long>(fields, "callsStarted"), int.MinValue, int.MaxValue),
-            Field<long>(fields, "inputTokensUsed"),
-            Field<long>(fields, "outputTokensUsed"),
-            Field<bool>(fields, "callInFlight"),
-            (int)Math.Clamp(Field<long>(fields, "pendingInputTokens"), int.MinValue, int.MaxValue),
-            (int)Math.Clamp(Field<long>(fields, "pendingOutputTokens"), int.MinValue, int.MaxValue),
-            Field<Timestamp>(fields, "createdAt").ToDateTimeOffset(),
-            Field<Timestamp>(fields, "updatedAt").ToDateTimeOffset(),
-            Field<Timestamp>(fields, "expiresAt").ToDateTimeOffset());
-
-        if (!string.Equals(record.Id, snapshot.Id, StringComparison.Ordinal))
+        catch (StoredStateInvalidException)
         {
-            throw new StoredStateInvalidException("A reservation id does not match its document.");
+            return null;
         }
-
-        return record;
     }
-
-    private static T Field<T>(IDictionary<string, object> fields, string name) =>
-        fields.TryGetValue(name, out var value) && value is T typed
-            ? typed
-            : throw new StoredStateInvalidException($"Stored field '{name}' is missing or has the wrong type.");
 }

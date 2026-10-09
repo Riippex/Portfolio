@@ -19,11 +19,54 @@ public enum ReservationState
     Cancelled,
 
     /// <summary>
-    /// The outcome is unknown (timeout, disconnect, invalid usage, lost permit). The reserved
-    /// charge stays in the counters and is never refunded automatically.
+    /// The lease ended while no provider call was in flight (none began, or every started call
+    /// reported its usage). Nothing can still be running for it, so the permit was freed; the
+    /// reserved charge stays. This is the only state a lease can move a reservation into.
+    /// </summary>
+    Lapsed,
+
+    /// <summary>
+    /// The outcome is unknown (timeout, disconnect, invalid usage, a call that may still be
+    /// running). The reserved charge stays in the counters, the record is kept as evidence and
+    /// is never refunded or deleted automatically; only an explicit reconciliation resolves it.
     /// </summary>
     Uncertain
 }
+
+public static class ReservationStates
+{
+    /// <summary>
+    /// Resolved obligations need no further action and may expire. Active and Uncertain
+    /// reservations are unresolved: their records are evidence and are never given an expiry.
+    /// </summary>
+    public static bool IsResolved(ReservationState state) =>
+        state is ReservationState.Settled or ReservationState.Cancelled or ReservationState.Lapsed;
+}
+
+/// <summary>What an operator concluded after checking the provider side of an unresolved reservation.</summary>
+public enum ReconciliationResolution
+{
+    /// <summary>The provider call is confirmed never to have run: the whole charge is refunded.</summary>
+    NotDispatched,
+
+    /// <summary>The provider confirmed completion with these usage figures: the charge becomes their tariff cost.</summary>
+    Completed,
+
+    /// <summary>The usage cannot be established: the reserved charge is accepted as final.</summary>
+    ChargeAsReserved
+}
+
+/// <summary>An unresolved reservation, with accounting metadata only.</summary>
+public sealed record UnresolvedReservation(
+    string Id,
+    ReservationState State,
+    string DayKey,
+    string MonthKey,
+    int CallsStarted,
+    bool CallInFlight,
+    long ReservedMicroUsd,
+    long ChargedMicroUsd,
+    DateTimeOffset UpdatedAt);
 
 /// <summary>The single control document: initialization marker, high-water marks and permit set.</summary>
 public sealed record LedgerRoot(
@@ -32,9 +75,13 @@ public sealed record LedgerRoot(
     string LastDayKey,
     string LastMonthKey,
     IReadOnlyDictionary<string, DateTimeOffset> Permits,
-    int LiveReservations)
+    int LiveReservations,
+    long Epoch = 0)
 {
     public const int CurrentSchemaVersion = 1;
+
+    /// <summary>The only schema version this code interprets. Anything else is rejected, never coerced.</summary>
+    public const long SupportedSchemaVersion = 1;
 }
 
 /// <summary>Charged micro-USD for one UTC day or month, tied to that period's key.</summary>
@@ -61,7 +108,7 @@ public sealed record ReservationRecord(
     int PendingOutputTokens,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    DateTimeOffset ExpiresAt);
+    DateTimeOffset? ExpiresAt);
 
 /// <summary>Usage a provider reported for one finished call. Output is every billable output token, reasoning included.</summary>
 public readonly record struct ModelUsage(long InputTokens, long OutputTokens);
@@ -95,6 +142,18 @@ public static partial class ModelControlPeriods
     public static DateTimeOffset DayExpiry(string dayKey) => DayEnd(dayKey) + Retention;
 
     public static DateTimeOffset MonthExpiry(string monthKey) => MonthEnd(monthKey) + Retention;
+
+    /// <summary>
+    /// When a RESOLVED reservation may expire: 40 days after the end of its month, or 40 days
+    /// after it was resolved if that is later, so the evidence of a late reconciliation is kept.
+    /// Unresolved reservations have no expiry at all.
+    /// </summary>
+    public static DateTimeOffset ResolvedExpiry(string monthKey, DateTimeOffset resolvedAt)
+    {
+        var byPeriod = MonthExpiry(monthKey);
+        var byResolution = resolvedAt + Retention;
+        return byPeriod > byResolution ? byPeriod : byResolution;
+    }
 
     [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}\z")]
     private static partial Regex DayPattern();

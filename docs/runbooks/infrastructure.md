@@ -51,8 +51,8 @@ The deployment stage (`dev`, `staging`, `prod`) is a separate input, `environmen
 
 The Assistant's budget ledger needs exactly one Firestore database for the whole portfolio, so
 dev and prod share one daily and monthly allowance and one set of permits. `deployment/control-ledger`
-declares it, its TTL policies (counters and reservation metadata expire 40 days after their period
-ends) and the least-privilege access of each stage's backend service account; it creates nothing
+declares it, its TTL policies (counters expire 40 days after their period ends, and so does resolved
+reservation metadata; unresolved reservations carry no expiry and are never deleted by TTL) and the least-privilege access of each stage's backend service account; it creates nothing
 until `create_database = true`, which the owner sets deliberately, once. Stage stacks only pass
 the project and database id to the service (`control_ledger_project_id`, `control_ledger_database_id`, both
 or neither) and never declare a database, so a stage cannot create a second allowance. Order: apply the

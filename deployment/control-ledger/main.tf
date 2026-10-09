@@ -13,10 +13,11 @@
 # ---------------------------------------------------------------------------
 
 locals {
-  # Collections whose documents carry an expiresAt timestamp: the period counters and the
-  # reservation metadata. The backend sets expiresAt to 40 days after the accounting period
-  # ends. Physical TTL deletion is asynchronous (often within hours, not guaranteed); the
-  # backend treats expiry logically and never relies on the deletion for correctness.
+  # Collections whose documents may carry an expiresAt timestamp: the period counters and the
+  # reservation metadata. Counters get expiresAt 40 days after their period ends; a reservation
+  # gets it only once it is resolved, so an unresolved (Active or Uncertain) reservation has no
+  # expiresAt field and TTL cannot match it. Physical TTL deletion is asynchronous (often within
+  # hours, not guaranteed); the backend treats expiry logically and never relies on it.
   ttl_collections = toset(["model_control_periods", "model_control_reservations"])
 
   database_resource = "projects/${var.project_id}/databases/${var.database_id}"

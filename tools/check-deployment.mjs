@@ -237,6 +237,10 @@ function needsOf(jobText) {
 // The checks
 // ---------------------------------------------------------------------------------------
 
+function modelControlText(files) {
+  return typeof files["docs/runbooks/model-control.md"] === "string" ? files["docs/runbooks/model-control.md"] : "";
+}
+
 export function checkDeployment(files) {
   const violations = [];
   const fail = (id, message) => violations.push(`[${id}] ${message}`);
@@ -741,6 +745,9 @@ export function checkDeployment(files) {
   if (/Assistant__ModelControl__(Tariff|InitializeStore)/.test(gcpAll)) {
     fail("model-control", "Terraform must not configure a tariff or initialize the store: paid model use stays disabled until a separate activation");
   }
+  if (!/Unresolved reservations \(`Active`, `Uncertain`\) have no expiry|unresolved reservation has no\s+expiresAt/i.test(ledgerAll + modelControlText(files)) ) {
+    fail("model-control", "the control ledger definitions or runbook must state that unresolved reservations are never given an expiry");
+  }
   if (!/emulators firestore start/.test(ci) || !/FIRESTORE_EMULATOR_HOST/.test(ci) || !/Rafael\.Portfolio\.EmulatorTests\.csproj/.test(ci)) {
     fail("model-control", "ci.yml must run the emulator-backed ledger tests against a local Firestore emulator");
   }
@@ -756,6 +763,11 @@ export function checkDeployment(files) {
     [/deployment\/control-ledger/, "the shared database ownership"],
     [/never skipped or passed/i, "that emulator tests never skip"],
     [/IP address or country/i, "that no visitor data is stored"],
+    [/no expiry/i, "that unresolved reservations have no expiry"],
+    [/ReconcileAsync/, "the explicit reconciliation of unresolved calls"],
+    [/in\s+flight/i, "that a permit with a call in flight is not released by a lease"],
+    [/ConcurrentChange/, "race-safe capacity reconciliation"],
+    [/schemaVersion/, "the exact schema version rule"],
   ]) {
     if (!needle.test(modelControl)) fail("documentation", `docs/runbooks/model-control.md must document ${why}`);
   }

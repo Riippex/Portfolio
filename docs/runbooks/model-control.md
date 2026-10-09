@@ -51,9 +51,11 @@ contact data, CV text, tool payload or transcript.
 
 | Document | Fields |
 |---|---|
-| `model_control/state` (one) | schema version, policy version, last UTC day and month keys, the active permit set (reservation id to lease end, at most 2), live reservation count |
-| `model_control_periods/day_YYYY-MM-DD`, `month_YYYY-MM` | kind, period key, charged micro-USD, `expiresAt` |
-| `model_control_reservations/{id}` | opaque id (bounded token), state, policy, tariff and model versions, day and month keys, reserved and charged micro-USD, call and token limits and usage, in-flight flag, timestamps, `expiresAt` |
+| `model_control/state` (one) | schema version, policy version, last UTC day and month keys, the active permit set (reservation id to lease end, at most 2), live reservation count, an epoch that advances with every admission and cleanup |
+| `model_control_periods/day_YYYY-MM-DD`, `month_YYYY-MM` | schema version, kind, period key, charged micro-USD, `expiresAt` |
+| `model_control_reservations/{id}` | opaque id (bounded token), state, policy, tariff and model versions, day and month keys, reserved and charged micro-USD, call and token limits and usage, in-flight flag, timestamps, and `expiresAt` **only once the reservation is resolved** |
+
+Every document carries `schemaVersion`, and the backend accepts exactly the supported value: a missing, malformed, unknown or out-of-range version (including a large integer that would wrap to the supported one when narrowed) is rejected before any other field is read, grants no paid work and changes nothing.
 
 Logs carry correlation hashes, outcome codes and counts only.
 
@@ -78,11 +80,16 @@ paid work twice.
 
 * **Unknown outcome stays charged.** Timeouts, disconnects, invalid usage, a lost permit and TTL
   never refund. The charge remains in the counters.
-* **Permits and the lease.** A permit is held for a lease (5 minutes, longer than a turn's 15
-  second bound and any provider call deadline). Closing a connection does not free it. After
-  the lease ends, the next reservation reclaims the permit and marks the reservation
-  `Uncertain`; the charge is kept. The lease is an accounting bound, **not** control over what
-  a remote provider is still doing.
+* **A lease is not proof the provider finished.** A permit is held for a lease (5 minutes, longer
+  than a turn's 15 second bound), but a remote call can outlive its caller and the lease. When a
+  lease has ended, the next reservation frees the permit **only if nothing can still be running
+  for it**: no call was dispatched, or every dispatched call reported its usage. Those
+  reservations become `Lapsed` (charge kept). A permit whose reservation has a call **in
+  flight**, or whose reservation is missing or unreadable, stays held; its reservation becomes
+  `Uncertain` and keeps the permit and the charge until it is explicitly reconciled (see
+  Recovery). Waiting longer, restarting or a caller timeout never releases it, so two crashed
+  dispatched calls disable new paid work until an operator resolves them. The lease is an
+  accounting bound, **not** control over what a remote provider is still doing.
 * **Corrupt, lost or missing state denies.** Negative or oversized balances, wrong types, an
   unknown schema or policy version, a missing current-period counter, a clock behind the
   recorded high-water mark, and a store that was never initialized all deny and change nothing.
@@ -95,13 +102,28 @@ paid work twice.
 
 ## Retention and cleanup
 
-Counters and reservation metadata expire **40 days after the end of their accounting period**
-(a reservation, after the end of its month), written to `expiresAt`. Firestore TTL deletes
-them asynchronously (typically within hours, not guaranteed), so correctness never depends on
-the physical deletion; reading code treats expiry logically. `CleanupExpiredAsync` removes
-expired inactive metadata and lowers the live count; `Active` reservations are never removed. It also runs once,
-bounded, when the live count reaches its capacity (2,000). `ReconcileCapacityAsync` sets the
-count from an observed total after TTL deletions.
+Expiry depends on whether the obligation is resolved.
+
+* **Unresolved reservations (`Active`, `Uncertain`) have no expiry.** They are stored without an
+  `expiresAt` field, and Firestore TTL only deletes documents that have one, so TTL cannot
+  remove evidence of an open obligation. The backend's cleanup also refuses to delete them, even
+  if a stray expiry were present. They count toward the 2,000 live-reservation capacity until
+  resolved, so unresolved evidence stays bounded and, if it ever fills the ceiling, denies.
+* **Resolved reservations (`Settled`, `Cancelled`, `Lapsed`) expire 40 days after the end of their
+  month**, or 40 days after they were resolved if that is later, so a late reconciliation keeps
+  its evidence for 40 days.
+* **Day and month counters expire 40 days after their period ends.** A closed period no longer
+  affects any admission. If a reservation is reconciled after its counters expired, the
+  reservation evidence is updated and the permit released without recreating a counter.
+
+Firestore TTL deletes asynchronously (typically within hours, not guaranteed), so correctness
+never depends on the physical deletion. `CleanupExpiredAsync` removes expired resolved metadata,
+lowers the live count and advances the epoch; it also runs once, bounded, when the live count
+reaches its capacity. `ReconcileCapacityAsync` sets the live count from an observed total after
+TTL deletions, race-safely: it counts, then writes only if the control document's epoch and count
+are exactly what they were before counting, otherwise it changes nothing (`ConcurrentChange`) and
+the caller retries. An admission or cleanup during the count can therefore never be overwritten,
+and a deletion during the count can only make the total too high, which is the safe direction.
 
 ## Initialization
 
@@ -112,11 +134,26 @@ overwrites an existing document.
 
 ## Recovery
 
-* Permits stuck after a crash free themselves when the lease ends (next reservation).
-* If a counter is lost or corrupt the ledger denies. Recovery is an owner action in the Firestore
-  console: stop paid use, compare the period counter with the sum of its reservations'
-  `chargedMicroUsd`, correct it, and confirm the control document's `lastDayKey`/`lastMonthKey`.
-  Never recreate a counter at zero for a period that already spent money.
+Recovery is explicit, operator-driven and conservative. No request path, timer or HTTP endpoint
+calls it.
+
+* **Find unresolved reservations** with `IModelControlRecovery.ListUnresolvedAsync` (accounting
+  metadata only) or in the Firestore console (`model_control_reservations` with state `Active` or
+  `Uncertain`). Ask whether the provider call really ran, using the provider's own usage records.
+* **Resolve each one** with `IModelControlRecovery.ReconcileAsync`, which also releases its
+  permit and adjusts only that reservation's **own** day and month counters:
+  * `NotDispatched`: the call is confirmed never to have run; the whole charge is refunded.
+  * `Completed` with the provider-confirmed usage of the call that was in flight; the charge
+    becomes its tariff cost (it can be higher than reserved).
+  * `ChargeAsReserved`: the usage cannot be established; the reserved charge is accepted as final.
+  A resolved reservation cannot be reconciled again. The port has no host entry point yet, so
+  until a maintenance tool exists the same steps are done by hand in the console: set the
+  reservation's state, correct the counters by the same amount, remove its entry from the
+  control document's `permits`, set its `expiresAt` per the retention rules, and advance `epoch`.
+* If a counter is lost or corrupt the ledger denies. Compare the period counter with the sum of
+  its reservations' `chargedMicroUsd`, correct it, and confirm the control document's
+  `lastDayKey`/`lastMonthKey`. Never recreate a counter at zero for a period that already spent
+  money.
 * A new tariff or policy requires a new version and a deliberate migration of the control
   document; a mismatch denies.
 
