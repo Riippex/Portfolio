@@ -1,10 +1,11 @@
 # Assistant orchestration
 
-The async Assistant path is implemented behind two closed production gates:
-`DisabledModelProvider` and `UnverifiedModelRequestTokenCounter`. No real provider,
-tokenizer, tools, vacancy transmission, or model activation is included. An
-available provider alone cannot authorize dispatch. Synchronous `Chat` remains
-deterministic and never enters the paid path.
+The async Assistant path defaults to two closed gates: `DisabledModelProvider`
+and `UnverifiedModelRequestTokenCounter`. The optional [Vertex adapter and operator
+CLI](vertex-provider.md) require separately reviewed activation inputs; no live
+activation, tools or vacancy transmission is included. An available provider alone
+cannot authorize dispatch. Synchronous `Chat` remains deterministic and never
+enters the paid path.
 
 ## Evidence and rendering
 
@@ -124,7 +125,7 @@ disabled host composition. Emulator tests independently exercise real Firestore
 transactions; without an emulator those checks are incomplete, never skipped.
 
 Before activation: review real counting, model pricing/version and retention;
-provide an owner-controlled reconciliation entry point; verify shared ledger,
+verify the owner-controlled reconciliation CLI and its access; verify shared ledger,
 IAM and TTL; deploy access controls; then obtain explicit activation approval.
 There is no public recovery API. This slice is not evidence of a live model or
 production rollout.

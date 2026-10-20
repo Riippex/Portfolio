@@ -11,7 +11,14 @@ using Rafael.Portfolio.Modules.Portfolio.Application;
 using Rafael.Portfolio.Modules.Portfolio.Infrastructure;
 using Rafael.Portfolio.Web.Adapters;
 using Rafael.Portfolio.Web.Endpoints;
+using Rafael.Portfolio.Web.Operations;
 using Rafael.Portfolio.Web.Security;
+
+if (args.Length > 0 && args[0] == "--model-control")
+{
+    Environment.ExitCode = await ModelControlOperator.FromEnvironmentAsync(args[1..]);
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -64,8 +71,7 @@ builder.Services.AddSingleton<ITurnstileValidator>(sp =>
             sp.GetRequiredService<IHttpClientFactory>().CreateClient("turnstile"),
             turnstileSecret));
 builder.Services.AddSingleton<IAssistantEvidenceAdapter, KnowledgeAssistantEvidenceAdapter>();
-builder.Services.AddSingleton<IModelProvider, DisabledModelProvider>();
-builder.Services.AddSingleton<IModelRequestTokenCounter, UnverifiedModelRequestTokenCounter>();
+ModelProviderComposition.Register(builder.Services, builder.Configuration);
 builder.Services.AddSingleton<IAssistantTurnOrchestrator, AssistantTurnOrchestrator>();
 builder.Services.AddSingleton<IAssistantSynthesizer, DeterministicGroundedSynthesizer>();
 builder.Services.AddSingleton<IAssistantService, AssistantService>();

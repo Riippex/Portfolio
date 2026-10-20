@@ -168,10 +168,11 @@ calls it.
   ends) is skipped and never recreated, and the other counter is still adjusted. A counter that
   is missing while its period is still live, corrupt, for another period, or too small to take a
   refund, refuses the whole reconciliation with `StateInvalid`: no counter, reservation or permit
-  changes. Counters of the current period are never touched. The port has no host entry point yet, so
-  until a maintenance tool exists the same steps are done by hand in the console: set the
-  reservation's state, correct the counters by the same amount, remove its entry from the
-  control document's `permits`, set its `expiresAt` per the retention rules, and advance `epoch`.
+  changes. Counters of the current period are never touched. Use the explicit
+  [operator-only CLI](vertex-provider.md#operator-recovery-not-http) in the published Web
+  executable; it requires exact reservation confirmation and a provider-state attestation
+  before invoking the atomic recovery port. It does not start an HTTP server. Do not
+  hand-edit counters or release a permit based only on a client timeout.
 * If a counter is lost or corrupt the ledger denies. Compare the period counter with the sum of
   its reservations' `chargedMicroUsd`, correct it, and confirm the control document's
   `lastDayKey`/`lastMonthKey`. Never recreate a counter at zero for a period that already spent

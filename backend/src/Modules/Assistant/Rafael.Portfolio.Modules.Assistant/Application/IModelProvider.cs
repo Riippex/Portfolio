@@ -10,7 +10,8 @@ public sealed record ModelProviderRequest(
     string SystemPrompt,
     string UserMessage,
     string OutputSchema,
-    int MaxOutputTokens = 600);
+    int MaxOutputTokens = 600,
+    string? ReservationId = null);
 
 public sealed record ModelProviderResponse(
     bool Success,

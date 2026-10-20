@@ -34,10 +34,23 @@ model work (see [model control](runbooks/model-control.md)).
   asynchronous; logical expiry does not wait for it.
 - Deletion: expiry and the backend's bounded cleanup. There is no per-visitor record to delete.
 - Logs: outcome codes and counts only.
+- The optional provider attaches the existing opaque reservation ID and fixed
+  prompt version as billing-only labels, never visitor identifiers or content.
+  These labels can be retained in the provider's billing system separately from
+  the application's 40-day ledger retention. The owner reviews that external
+  lifecycle before activation. The count receipt is weak-keyed process memory,
+  consumed once, not a durable record or cross-session memory.
 
 ## Product defaults
 
 - Anonymous chat has no durable transcript or cross-session memory.
+- Before external model processing is activated, disclose the provider, purpose,
+  fields sent, global processing and applicable standard retention; obtain an
+  explicit visitor choice and enforce its current notice version in the backend
+  before token counting or inference. Contact consent and operator configuration
+  do not substitute for this choice. Missing authorization keeps processing
+  deterministic and local. This assistant authorization gate is required but not
+  implemented yet; see the [activation checklist](runbooks/vertex-provider.md#visitor-authorization-gate-required-not-implemented-in-this-slice).
 - Async assistant claim aliases, provider requests, output validation and token
   counts remain request-transient. Orphaned asynchronous work is observed without
   retaining a transcript or introducing new log fields. The approved model-control
