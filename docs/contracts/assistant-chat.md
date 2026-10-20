@@ -1,0 +1,68 @@
+# Assistant chat and model-processing choice
+
+Both `POST /v1/assistant/chat` and `POST /v1/assistant/chat/stream` accept the
+same bounded request. JSON returns the existing grounded response; SSE retains
+its existing status/citation/token/done contract. Identity, stage admission,
+rate limits, Turnstile and safety checks apply regardless of the visitor's choice.
+
+## Request
+
+```json
+{
+  "message": "What does Rafael's profile document?",
+  "modelConsent": {
+    "accepted": true,
+    "noticeVersion": "rai-google-global-standard-v1"
+  }
+}
+```
+
+- `message`: required, nonblank, at most 500 characters.
+- `slug`: optional existing evidence filter, at most 64 alphanumeric/hyphen characters.
+- `turnstileToken`: optional in local Development/Test only; remote stages still
+  require the existing human-verification flow.
+- `modelConsent`: optional. Only an object with exactly `accepted: true` and
+  the case-sensitive current `noticeVersion` grants optional model processing.
+  It is a request-scoped visitor assertion, not proof of identity, a durable
+  consent receipt, or permission to bypass any other control.
+
+Current notice: `rai-google-global-standard-v1`. It describes sending the current
+question, selected public facts and opaque accounting metadata to Google Cloud
+for relevant evidence selection, global processing, standard external retention
+(not zero retention), responsible operator/contact, sensitive-data warning,
+no application transcript/consent storage, and withdrawal for future submissions.
+The frontend displays this notice before the initially unchecked choice and
+links Google's retention information. Contact consent is separate.
+
+Missing/null, false, stale, incorrectly typed, duplicate/unknown inner properties,
+or otherwise malformed optional consent is denied, not guessed/coerced. An
+otherwise valid request still gets the deterministic evidence-based path. An
+invalid overall JSON body or invalid message/filter remains an ordinary 400;
+it never authorizes external processing. Old clients that omit consent work
+without the model. Adding a consent header or using an allowlisted IP does not
+grant model processing.
+
+## Enforcement and lifecycle
+
+The Assistant application service checks the choice before entering orchestration
+in both async chat and SSE. This precedes credentials, ledger reservations,
+CountTokens and generation. Counting is also external processing. Synchronous
+`Chat` remains deterministic even with valid consent. An accepted choice is
+necessary but not sufficient: reviewed provider configuration, safety, evidence,
+budgets and availability must also permit the turn.
+
+The checkbox is optional for free text and suggested questions. Its value lives
+only in component/request memory, resets on reload, and can be unchecked between
+submissions. Subsequent requests no longer authorize the model; this does not
+recall processing already dispatched. The choice, notice version and visitor
+identity are not added to logs, browser storage or the model-control ledger.
+The choice itself is not provider input. No new persistent consent register is
+approved. If one is required, define its lifecycle separately before release.
+
+Change the notice version in the backend, frontend and this contract together
+when provider, purpose, location, data scope or retention disclosure changes.
+Older consent then fails closed; it cannot silently authorize the new notice.
+Automated parity and bypass tests protect this boundary. These product controls
+do not certify legal compliance or complete the actual provider/project review.
+Provider activation and production release remain separately gated by the
+[Vertex activation runbook](../runbooks/vertex-provider.md).

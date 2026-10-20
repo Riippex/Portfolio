@@ -8,6 +8,7 @@ import {
   sentHeaders,
 } from "@/modules/security/proxy-test-support";
 import { POST } from "./route";
+import { MODEL_PROCESSING_NOTICE_VERSION } from "@/modules/assistant/model";
 
 function streamRequest(headers: Record<string, string> = {}) {
   return new Request("http://localhost/api/assistant/chat/stream", {
@@ -68,6 +69,26 @@ describe("assistant stream proxy", () => {
 
     expect(await expectSignedIdentity(calls[0])).toMatchObject({ tier: "team" });
     expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].init.body as string).modelConsent).toBeUndefined();
+  });
+
+  it.each([
+    undefined,
+    { accepted: false, noticeVersion: MODEL_PROCESSING_NOTICE_VERSION },
+    { accepted: true, noticeVersion: MODEL_PROCESSING_NOTICE_VERSION },
+    "malformed-choice",
+  ])("preserves the visitor choice without granting or coercing it (%j)", async (modelConsent) => {
+    configure({});
+    const calls = captureFetch();
+    const payload = { message: "hello", ...(modelConsent === undefined ? {} : { modelConsent }) };
+    const response = await POST(new Request("http://localhost/api/assistant/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.7", "X-Model-Consent": "true" },
+      body: JSON.stringify(payload),
+    }));
+    expect(response.status).toBe(200);
+    expect(JSON.parse(calls[0].init.body as string)).toEqual(payload);
+    expect(sentHeaders(calls[0])["X-Model-Consent"]).toBeUndefined();
   });
 
   it("fails closed with 503 when the stage is missing or invalid, even if NODE_ENV looks like dev", async () => {

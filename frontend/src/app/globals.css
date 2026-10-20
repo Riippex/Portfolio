@@ -76,6 +76,15 @@ a { color: inherit; text-decoration: none; }
 .assistant-actions button { border:1px solid rgba(255,255,255,.2); background:transparent; color:#aaa89e; padding:10px 13px; font:11px monospace; cursor:pointer; transition:border-color .2s,color .2s; }
 .assistant-actions button:hover:not(:disabled) { border-color:var(--acid); color:white; }
 .assistant-actions button:disabled { cursor:not-allowed; opacity:.5; }
+.assistant-model-consent { margin:20px 0; padding:16px; border:1px solid rgba(255,255,255,.2); color:#c6c4b9; font-size:12px; line-height:1.6; }
+.assistant-model-consent p { margin:0 0 12px; }
+.assistant-model-consent a { color:var(--acid); text-decoration:underline; }
+.assistant-model-choice { display:flex; align-items:flex-start; gap:10px; color:white; cursor:pointer; }
+.assistant-model-choice input { margin-top:4px; accent-color:var(--acid); flex-shrink:0; }
+.assistant-model-choice input:focus-visible { outline:2px solid var(--acid); outline-offset:3px; }
+.assistant-model-consent details { margin-top:12px; }
+.assistant-model-consent summary { cursor:pointer; text-decoration:underline; }
+.assistant-model-consent details p { margin:12px 0 0; }
 .assistant-input-row { display:flex; gap:12px; margin-top:18px; align-items:center; flex-wrap:wrap; }
 .assistant-input-row input { flex:1; min-width:260px; height:48px; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.2); color:white; padding:0 16px; font:14px monospace; outline:none; transition:border-color .2s; }
 .assistant-input-row input:focus { border-color:var(--acid); }

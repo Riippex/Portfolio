@@ -5,7 +5,8 @@ namespace Rafael.Portfolio.Modules.Assistant.Domain;
 public sealed partial record AssistantChatRequest(
     string Message,
     string? Slug = null,
-    string? TurnstileToken = null)
+    string? TurnstileToken = null,
+    AssistantModelConsent? ModelConsent = null)
 {
     public const int MaxMessageLength = 500;
     public const int MaxSlugLength = 64;

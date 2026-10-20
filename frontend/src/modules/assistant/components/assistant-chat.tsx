@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useTransition } from "react";
 import type { AssistantChatMessage, AssistantCitation, AssistantGroundingStatus } from "../model";
+import { MODEL_PROCESSING_NOTICE_VERSION } from "../model";
 import { streamAssistantChat } from "../api";
 import { prepareAssistantChatRequest } from "../turnstile";
 import Link from "next/link";
@@ -26,6 +27,7 @@ export function AssistantChat() {
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [allowModelProcessing, setAllowModelProcessing] = useState(false);
   const [, startTransition] = useTransition();
 
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -76,7 +78,8 @@ export function AssistantChat() {
 
     let preparation;
     try {
-      preparation = await prepareAssistantChatRequest(trimmed);
+      preparation = await prepareAssistantChatRequest(trimmed, undefined,
+        allowModelProcessing ? { accepted: true, noticeVersion: MODEL_PROCESSING_NOTICE_VERSION } : undefined);
     } catch {
       preparation = { kind: "verification_failed" as const };
     }
@@ -234,6 +237,43 @@ export function AssistantChat() {
           </button>
         </div>
       )}
+
+      <div className="assistant-model-consent">
+        <p id="assistant-model-notice">
+          Optional Google AI: your current question, selected public portfolio facts and opaque
+          accounting metadata may be sent to Google Cloud to help select relevant evidence.
+          Processing is global, with no fixed-country guarantee, under Google&apos;s standard retention
+          policies, including applicable abuse monitoring and caching. This is not zero retention.
+          Leave this off to receive an evidence-based response without the external model;
+          normal site security checks still apply.
+        </p>
+        <label className="assistant-model-choice">
+          <input
+            type="checkbox"
+            checked={allowModelProcessing}
+            onChange={(e) => setAllowModelProcessing(e.target.checked)}
+            disabled={isStreaming}
+            aria-describedby="assistant-model-notice"
+          />
+          <span>I allow Google AI processing as described above for my questions in this open chat.</span>
+        </label>
+        <details>
+          <summary>Privacy details and changing your choice</summary>
+          <p>
+            Rafael Patiño operates this portfolio. For privacy questions or rights requests,
+            use the <a href="#contact">Contact section</a>. Do not send sensitive information or
+            someone else&apos;s personal data. R AI sends only the current turn, not your chat history;
+            the application does not save a transcript or this choice. Reloading resets
+            this choice. Uncheck it before your next question to stop future model
+            processing; this cannot recall data already processed by Google. The model may be
+            unavailable even when you opt in. This permission is separate from Contact consent.
+          </p>
+          <p>
+            Read <a href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/zero-data-retention" target="_blank" rel="noopener noreferrer">Google&apos;s processing and retention information</a>.
+            Notice version: {MODEL_PROCESSING_NOTICE_VERSION}.
+          </p>
+        </details>
+      </div>
 
       <div className="assistant-actions" aria-label="Suggested questions">
         {SUGGESTIONS.map((suggestion) => (

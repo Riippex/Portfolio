@@ -25,6 +25,15 @@ export interface AssistantChatRequest {
   readonly message: string;
   readonly slug?: string;
   readonly turnstileToken?: string;
+  readonly modelConsent?: AssistantModelConsent;
+}
+
+// Versioned with the backend policy and docs/contracts/assistant-chat.md.
+export const MODEL_PROCESSING_NOTICE_VERSION = "rai-google-global-standard-v1";
+
+export interface AssistantModelConsent {
+  readonly accepted: boolean;
+  readonly noticeVersion: string;
 }
 
 export type AssistantStreamEvent =

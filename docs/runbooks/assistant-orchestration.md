@@ -7,6 +7,14 @@ activation, tools or vacancy transmission is included. An available provider alo
 cannot authorize dispatch. Synchronous `Chat` remains deterministic and never
 enters the paid path.
 
+The [visitor-processing choice](../contracts/assistant-chat.md) is checked by
+`AssistantService` before orchestration in both async JSON and SSE. Missing,
+refused, malformed or stale consent reaches no model credentials, counter,
+ledger or provider. Turnstile, an allowlisted IP or an operator review flag
+cannot substitute for the current affirmative visitor choice. The choice itself
+is not passed to the model or persisted. Valid consent does not bypass any of
+the other gates or guarantee model availability.
+
 ## Evidence and rendering
 
 Safety evaluation and the existing verified-evidence selection precede model

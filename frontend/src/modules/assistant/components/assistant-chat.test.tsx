@@ -15,6 +15,7 @@ vi.mock("../turnstile", () => ({
 
 import { AssistantChat } from "./assistant-chat";
 import { AssistantPreview } from "./assistant-preview";
+import { MODEL_PROCESSING_NOTICE_VERSION } from "../model";
 
 async function submitQuestion(text: string) {
   const input = screen.getByLabelText("Your question");
@@ -73,5 +74,63 @@ describe("AssistantChat request preparation failures", () => {
 
     await waitFor(() => expect(input.disabled).toBe(false));
     expect(streamAssistantChat).not.toHaveBeenCalled();
+  });
+
+  function prepareSuccessfulTurn() {
+    prepareAssistantChatRequest.mockImplementation(async (message, _slug, modelConsent) => ({
+      kind: "ready", request: { message, ...(modelConsent ? { modelConsent } : {}) },
+    }));
+    streamAssistantChat.mockImplementation(async (_request, callbacks) => {
+      callbacks.onToken?.("A documented response.");
+      callbacks.onDone?.();
+    });
+  }
+
+  it("starts unchecked, explains global standard retention, and permits deterministic questions", async () => {
+    prepareSuccessfulTurn();
+    render(<AssistantChat />);
+    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.required).toBe(false);
+    expect(screen.getByText(/Optional Google AI:/).textContent).toContain("not zero retention");
+    expect(screen.getByText(/Optional Google AI:/).textContent).toContain("no fixed-country guarantee");
+    expect(screen.getByRole("link", { name: /Google's processing/ }).getAttribute("href")).toContain("docs.cloud.google.com/");
+    expect(screen.getByRole("link", { name: "Contact section" }).getAttribute("href")).toBe("#contact");
+
+    await submitQuestion("Tell me about Expinn");
+    await waitFor(() => expect(streamAssistantChat).toHaveBeenCalledTimes(1));
+    expect(streamAssistantChat.mock.calls[0][0]).toEqual({ message: "Tell me about Expinn" });
+  });
+
+  it("attaches only current affirmative consent and allows withdrawal before the next turn", async () => {
+    prepareSuccessfulTurn();
+    render(<AssistantChat />);
+    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    fireEvent.click(checkbox);
+    await submitQuestion("First question");
+    await waitFor(() => expect(streamAssistantChat).toHaveBeenCalledTimes(1));
+    expect(streamAssistantChat.mock.calls[0][0]).toEqual({
+      message: "First question", modelConsent: { accepted: true, noticeVersion: MODEL_PROCESSING_NOTICE_VERSION },
+    });
+    await waitFor(() => expect(checkbox.disabled).toBe(false));
+    fireEvent.click(checkbox);
+    await submitQuestion("Second question");
+    await waitFor(() => expect(streamAssistantChat).toHaveBeenCalledTimes(2));
+    expect(streamAssistantChat.mock.calls[1][0]).toEqual({ message: "Second question" });
+  });
+
+  it("uses the same choice for suggested questions and never persists it across remounts", async () => {
+    prepareSuccessfulTurn();
+    const storage = vi.spyOn(Storage.prototype, "setItem");
+    const mounted = render(<AssistantChat />);
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "What is Vextis?" }));
+    await waitFor(() => expect(streamAssistantChat).toHaveBeenCalledTimes(1));
+    expect(streamAssistantChat.mock.calls[0][0].modelConsent).toEqual({ accepted: true, noticeVersion: MODEL_PROCESSING_NOTICE_VERSION });
+    expect(storage).not.toHaveBeenCalled();
+    mounted.unmount();
+    render(<AssistantChat />);
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
+    storage.mockRestore();
   });
 });

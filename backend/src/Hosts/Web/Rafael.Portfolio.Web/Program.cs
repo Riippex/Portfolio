@@ -23,6 +23,8 @@ if (args.Length > 0 && args[0] == "--model-control")
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new AssistantModelConsentJsonConverter()));
 builder.Services.AddSingleton<IPortfolioCatalog>(_ => EvidenceInventoryPortfolioCatalog.FromFile(
     builder.Configuration["EvidenceInventory:ManifestPath"]
     ?? EvidenceInventoryPortfolioCatalog.BundledManifestPath));

@@ -1,4 +1,4 @@
-import type { AssistantChatRequest } from "./model";
+import type { AssistantChatRequest, AssistantModelConsent } from "./model";
 
 const TURNSTILE_SCRIPT_URL =
   "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
@@ -136,7 +136,8 @@ export async function acquireTurnstileToken(): Promise<TurnstileTokenResult> {
 
 export async function prepareAssistantChatRequest(
   message: string,
-  slug?: string
+  slug?: string,
+  modelConsent?: AssistantModelConsent
 ): Promise<AssistantRequestPreparation> {
   const tokenResult = await acquireTurnstileToken();
   if (tokenResult.kind === "failed") {
@@ -148,6 +149,7 @@ export async function prepareAssistantChatRequest(
     request: {
       message,
       ...(slug ? { slug } : {}),
+      ...(modelConsent ? { modelConsent } : {}),
       ...(tokenResult.kind === "token" ? { turnstileToken: tokenResult.token } : {}),
     },
   };

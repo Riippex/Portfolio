@@ -81,6 +81,18 @@ describe("prepareAssistantChatRequest", () => {
     expect(result).toEqual({ kind: "ready", request: { message: "hello", slug: "vextis" } });
   });
 
+  it("forwards only the supplied model choice, independently of human verification", async () => {
+    vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "");
+    const { prepareAssistantChatRequest } = await import("./turnstile");
+    const { MODEL_PROCESSING_NOTICE_VERSION } = await import("./model");
+    for (const accepted of [true, false]) {
+      const modelConsent = { accepted, noticeVersion: MODEL_PROCESSING_NOTICE_VERSION };
+      expect(await prepareAssistantChatRequest("hello", undefined, modelConsent)).toEqual({
+        kind: "ready", request: { message: "hello", modelConsent },
+      });
+    }
+  });
+
   it("forwards the token using the documented managed-execution lifecycle", async () => {
     vi.stubEnv("NEXT_PUBLIC_TURNSTILE_SITE_KEY", "test-site-key");
     const container = createMockContainer();

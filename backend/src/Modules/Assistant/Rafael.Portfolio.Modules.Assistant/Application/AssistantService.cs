@@ -66,7 +66,8 @@ public sealed class AssistantService : IAssistantService
             return new AssistantChatResponse(SafeBoundaryMessage, AssistantGroundingStatus.NotDocumented, []);
         var start = _clock.GetTimestamp();
         var chunks = FindVerifiedChunks(request);
-        var modeled = _orchestrator is not null
+        // Consent gates the entire orchestrator, including credentials, counting and reservations.
+        var modeled = _orchestrator is not null && request.ModelConsent?.GrantsModelProcessing() == true
             ? await _orchestrator.RunAsync(request.Message, chunks, start, cancellationToken) : null;
         return modeled ?? _synthesizer.Synthesize(request.Message, chunks);
     }
@@ -99,7 +100,7 @@ public sealed class AssistantService : IAssistantService
 
         // Finish validation/accounting before emitting any model-path event. A disabled model
         // retains the existing deterministic event order, citations and token segmentation.
-        var modeled = _orchestrator is not null
+        var modeled = _orchestrator is not null && request.ModelConsent?.GrantsModelProcessing() == true
             ? await _orchestrator.RunAsync(request.Message, relevantChunks, start, cancellationToken) : null;
         var synthesis = modeled ?? _synthesizer.Synthesize(request.Message, relevantChunks);
         yield return AssistantStreamEvent.Status(synthesis.GroundingStatus);

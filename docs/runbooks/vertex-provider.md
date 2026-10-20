@@ -105,34 +105,33 @@ not activation approval or consent on behalf of visitors. Global processing has
 no fixed-country guarantee. Confirm the applicable project terms and retention
 before writing the visitor notice; do not invent one universal deletion period.
 
-### Visitor authorization gate (required; not implemented in this slice)
+### Visitor authorization gate
 
-The current assistant request has no provider-processing authorization field or
-enforcement. Contact consent does not authorize assistant processing. Do not set
-`DataPolicyReviewed` or activate visitor traffic until all these checks pass:
+The [versioned request contract](../contracts/assistant-chat.md) and UI now
+implement the optional, initially unchecked choice. The visible notice identifies
+Google Cloud, global processing, standard retention, data sent and purpose;
+privacy details name the operator/contact and explain withdrawal and no
+application transcript/consent storage. Contact consent remains separate.
 
-- Before submission, explain that the current question and selected public
-  evidence go to Google for a grounded answer, using global processing and
-  standard provider retention. Link the applicable privacy information and
-  identify the responsible contact, purpose and request/deletion channel.
-- Obtain an affirmative, initially unchecked choice, separate from Contact and
-  marketing. Warn against sending sensitive or third-party personal data.
-- Version the notice and carry the visitor's choice in the bounded request
-  contract. Validate it in the backend before **CountTokens**, credentials or
-  inference: counting itself transmits the question. An operator configuration
-  flag, client-only check, Turnstile or allowlist membership is not visitor consent.
-- Missing, false, malformed or stale authorization must make zero provider calls
-  and retain the deterministic response path. A refused choice must not prevent
-  browsing the portfolio. Permit withdrawal for subsequent submissions; explain
-  that this cannot recall data already processed by an external provider.
-- Keep the choice in request/component memory; do not silently add a durable
-  consent register, IP tracking, browser storage or transcript. If accountability
-  requires a retained record, separately define its minimal fields, purpose,
-  retention and deletion under the data-handling policy before implementing it.
-- Cover no-choice/rejection/stale-notice, crafted direct requests and SSE in
-  backend and frontend tests, plus the accepted path with synthetic transports.
-  These controls do not by themselves establish legal compliance; review the
-  final notice and applicable obligations before public launch.
+`AssistantService` checks current affirmative consent before the entire
+orchestrator in async JSON and SSE, so credentials, reservations, **CountTokens**
+and generation are unreachable without it. The host's strict optional-field
+converter denies malformed choices rather than coercing them. Missing, refused
+or stale choices retain deterministic chat and normal security checks. A client
+checkbox, operator flag, Turnstile or allowlist membership alone cannot grant it.
+
+The choice remains in component/request memory, resets on reload and can be
+withdrawn for subsequent submissions, not recalled from already dispatched
+processing. No ledger field, durable consent register, browser storage or new log
+field is added. If accountability requires retained proof, separately define its
+minimal lifecycle before implementing it. Automated tests exercise direct HTTP,
+SSE, application calls, the real adapter over synthetic transport, withdrawal,
+notice parity and the frontend choice.
+
+These controls do not establish legal compliance or complete project activation.
+Before setting `DataPolicyReviewed`, review the final notice against actual
+project terms/cache/logging settings and applicable obligations, and verify that
+the privacy request/contact channel works. Production release is still gated.
 
 The owner reviews API enablement and a minimal runtime role. CountTokens and
 GenerateContent require `aiplatform.endpoints.predict`; do not grant owner/editor
@@ -178,7 +177,7 @@ There is no HTTP endpoint, scheduler, request-path recovery or automatic refund.
 
 1. Verify this commit's tests and the real ledger emulator checks.
 2. Apply the recorded global/standard-retention decision, verify actual provider
-   terms/settings, and implement/test the visitor authorization gate above.
+   terms/settings and the notice/contact channel, and rerun visitor authorization checks.
 3. Review/apply the gated shared ledger, runtime IAM/API and configuration changes.
 4. Verify operator ADC/access and recovery without weakening uncertainty rules.
 5. Authorize a bounded synthetic count/inference smoke; verify complete-request

@@ -48,9 +48,12 @@ model work (see [model control](runbooks/model-control.md)).
   fields sent, global processing and applicable standard retention; obtain an
   explicit visitor choice and enforce its current notice version in the backend
   before token counting or inference. Contact consent and operator configuration
-  do not substitute for this choice. Missing authorization keeps processing
-  deterministic and local. This assistant authorization gate is required but not
-  implemented yet; see the [activation checklist](runbooks/vertex-provider.md#visitor-authorization-gate-required-not-implemented-in-this-slice).
+  do not substitute for this choice. The Assistant application service enforces
+  this gate for async JSON and SSE; missing, malformed or stale choice uses the
+  deterministic path without model processing. Choice and notice version live
+  only in component/request memory, not browser storage, transcripts, logs or
+  the ledger. See the [request contract](contracts/assistant-chat.md) and the
+  remaining [activation checks](runbooks/vertex-provider.md#visitor-authorization-gate).
 - Async assistant claim aliases, provider requests, output validation and token
   counts remain request-transient. Orphaned asynchronous work is observed without
   retaining a transcript or introducing new log fields. The approved model-control
