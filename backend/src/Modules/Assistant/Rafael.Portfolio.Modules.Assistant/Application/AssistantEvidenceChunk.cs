@@ -14,4 +14,7 @@ public sealed record AssistantEvidenceChunk(
     string Version,
     string Visibility,
     double Score,
-    IReadOnlyList<string> Citations);
+    IReadOnlyList<string> Citations,
+    IReadOnlyList<AssistantApprovedClaim>? ApprovedClaims = null);
+
+public sealed record AssistantApprovedClaim(string ClaimId, string Statement, string Status, string Citation);

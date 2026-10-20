@@ -38,6 +38,11 @@ model work (see [model control](runbooks/model-control.md)).
 ## Product defaults
 
 - Anonymous chat has no durable transcript or cross-session memory.
+- Async assistant claim aliases, provider requests, output validation and token
+  counts remain request-transient. Orphaned asynchronous work is observed without
+  retaining a transcript or introducing new log fields. The approved model-control
+  ledger remains the only durable model accounting record; provider activation
+  and external retention require a separate review.
 - Pasted job descriptions and job-match output are ephemeral and cannot add
   facts to the professional profile.
 - Agent memory is disabled until identity, consent, allowed values, retention,

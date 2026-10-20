@@ -29,6 +29,12 @@ public sealed class KnowledgeAssistantEvidenceAdapter : IAssistantEvidenceAdapte
             Version: r.Version,
             Visibility: r.Visibility,
             Score: r.Score,
-            Citations: r.Citations)).ToList();
+            Citations: r.Citations,
+            ApprovedClaims: r.Claims
+                .Where(c => string.Equals(r.EvidenceStatus, "verified", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(c.Status, "verified", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(c.Statement) && c.Statement.Length <= 400)
+                .Select(c => new AssistantApprovedClaim(c.ClaimId, c.Statement, c.Status, c.Citation))
+                .ToArray())).ToList();
     }
 }

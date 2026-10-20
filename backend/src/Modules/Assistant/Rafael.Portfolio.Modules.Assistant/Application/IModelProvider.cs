@@ -9,22 +9,12 @@ public interface IModelProvider
 public sealed record ModelProviderRequest(
     string SystemPrompt,
     string UserMessage,
-    IReadOnlyList<ModelToolDefinition>? Tools = null,
+    string OutputSchema,
     int MaxOutputTokens = 600);
 
 public sealed record ModelProviderResponse(
     bool Success,
     string? Text,
-    IReadOnlyList<ModelToolCall>? ToolCalls = null,
-    int InputTokens = 0,
-    int OutputTokens = 0,
+    int? InputTokens = null,
+    int? OutputTokens = null,
     string? ErrorMessage = null);
-
-public sealed record ModelToolDefinition(
-    string Name,
-    string Description,
-    object ParametersSchema);
-
-public sealed record ModelToolCall(
-    string ToolName,
-    string ArgumentsJson);

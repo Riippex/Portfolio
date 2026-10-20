@@ -99,7 +99,7 @@ public static class AssistantEndpoints
                 });
             }
 
-            var response = assistantService.Chat(request);
+            var response = await assistantService.ChatAsync(request, httpContext.RequestAborted);
             stopwatch.Stop();
 
             // Bounded observability: log metadata only, never raw user message or answer text

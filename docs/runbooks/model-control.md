@@ -5,6 +5,12 @@ defines what it stores, who owns it, how it behaves when things go wrong, and ho
 and operate it. No paid model is enabled by this feature: the real model provider stays
 disabled until a separate, explicit activation.
 
+The [async orchestration](assistant-orchestration.md) applies shorter shared
+request budgets to this port, records known usage even when output is rejected,
+and uses a bounded identical-usage Complete retry after an ambiguous response.
+It never retries the provider or invokes operator recovery. Incomplete accounting
+selects the deterministic answer (P2); the ledger's accounting rules are unchanged.
+
 **The ledger is a model-cost gate, not a total invoice cap.** It limits what the backend
 admits for model calls under the approved tariff. It does not cap the Google Cloud bill, other
 products, network egress, Firestore operations, or a provider outage that charges without a

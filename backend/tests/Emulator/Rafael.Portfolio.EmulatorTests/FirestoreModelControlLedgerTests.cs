@@ -7,7 +7,7 @@ namespace Rafael.Portfolio.EmulatorTests;
 
 // Transactional behaviour of the real Firestore adapter against the Firestore emulator. Fake
 // adapters prove the rules (unit tests); only these prove concurrency, restarts and storage.
-public sealed class FirestoreModelControlLedgerTests(FirestoreEmulatorFixture emulator) : IClassFixture<FirestoreEmulatorFixture>
+public sealed partial class FirestoreModelControlLedgerTests(FirestoreEmulatorFixture emulator) : IClassFixture<FirestoreEmulatorFixture>
 {
     private const long Worst = Fixtures.WorstCase;
     private static readonly DateTimeOffset Noon = Fixtures.Noon;

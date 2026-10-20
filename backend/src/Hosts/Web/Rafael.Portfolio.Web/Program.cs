@@ -1,4 +1,5 @@
 using Rafael.Portfolio.Modules.Assistant.Application;
+using Rafael.Portfolio.Modules.Assistant.Application.Orchestration;
 using Rafael.Portfolio.Modules.Assistant.Infrastructure;
 using Rafael.Portfolio.Modules.Contact.Application;
 using Rafael.Portfolio.Modules.Contact.Infrastructure;
@@ -64,11 +65,9 @@ builder.Services.AddSingleton<ITurnstileValidator>(sp =>
             turnstileSecret));
 builder.Services.AddSingleton<IAssistantEvidenceAdapter, KnowledgeAssistantEvidenceAdapter>();
 builder.Services.AddSingleton<IModelProvider, DisabledModelProvider>();
-builder.Services.AddSingleton<IAssistantSynthesizer>(sp =>
-    new ModelGroundedSynthesizer(
-        sp.GetRequiredService<IModelProvider>(),
-        sp.GetRequiredService<IModelControlLedger>(),
-        new DeterministicGroundedSynthesizer()));
+builder.Services.AddSingleton<IModelRequestTokenCounter, UnverifiedModelRequestTokenCounter>();
+builder.Services.AddSingleton<IAssistantTurnOrchestrator, AssistantTurnOrchestrator>();
+builder.Services.AddSingleton<IAssistantSynthesizer, DeterministicGroundedSynthesizer>();
 builder.Services.AddSingleton<IAssistantService, AssistantService>();
 builder.Services.AddSingleton<IJobMatchingEvidenceAdapter, KnowledgeJobMatchingEvidenceAdapter>();
 builder.Services.AddSingleton<IJobDescriptionAnalyzer, DeterministicJobDescriptionAnalyzer>();

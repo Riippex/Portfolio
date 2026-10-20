@@ -33,7 +33,8 @@ public sealed class HostCompositionTests
 
         Assert.IsType<KnowledgeAssistantEvidenceAdapter>(services.GetRequiredService<IAssistantEvidenceAdapter>());
         Assert.IsType<DisabledModelProvider>(services.GetRequiredService<IModelProvider>());
-        Assert.IsType<ModelGroundedSynthesizer>(services.GetRequiredService<IAssistantSynthesizer>());
+        Assert.IsType<DeterministicGroundedSynthesizer>(services.GetRequiredService<IAssistantSynthesizer>());
+        Assert.IsType<UnverifiedModelRequestTokenCounter>(services.GetRequiredService<IModelRequestTokenCounter>());
         Assert.IsType<AssistantService>(services.GetRequiredService<IAssistantService>());
         Assert.IsType<UnavailableModelControlLedger>(services.GetRequiredService<IModelControlLedger>());
     }

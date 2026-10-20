@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Rafael.Portfolio.Modules.Assistant.Application.Orchestration;
 using Rafael.Portfolio.Modules.Assistant.Domain;
 
 namespace Rafael.Portfolio.Modules.Assistant.Application;
@@ -23,15 +24,21 @@ public sealed class AssistantService : IAssistantService
     private readonly IAssistantEvidenceAdapter _evidenceAdapter;
     private readonly IAssistantSynthesizer _synthesizer;
     private readonly IAssistantSafetyEvaluator _safetyEvaluator;
+    private readonly IAssistantTurnOrchestrator? _orchestrator;
+    private readonly TimeProvider _clock;
 
     public AssistantService(
         IAssistantEvidenceAdapter evidenceAdapter,
         IAssistantSynthesizer synthesizer,
-        IAssistantSafetyEvaluator safetyEvaluator)
+        IAssistantSafetyEvaluator safetyEvaluator,
+        IAssistantTurnOrchestrator? orchestrator = null,
+        TimeProvider? timeProvider = null)
     {
         _evidenceAdapter = evidenceAdapter ?? throw new ArgumentNullException(nameof(evidenceAdapter));
         _synthesizer = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
         _safetyEvaluator = safetyEvaluator ?? throw new ArgumentNullException(nameof(safetyEvaluator));
+        _orchestrator = orchestrator;
+        _clock = timeProvider ?? TimeProvider.System;
     }
 
     public AssistantChatResponse Chat(AssistantChatRequest request)
@@ -52,6 +59,18 @@ public sealed class AssistantService : IAssistantService
         return _synthesizer.Synthesize(request.Message, relevantChunks);
     }
 
+    public async ValueTask<AssistantChatResponse> ChatAsync(AssistantChatRequest request, CancellationToken cancellationToken = default)
+    {
+        ValidateRequest(request);
+        if (!_safetyEvaluator.Evaluate(request.Message).IsSafe)
+            return new AssistantChatResponse(SafeBoundaryMessage, AssistantGroundingStatus.NotDocumented, []);
+        var start = _clock.GetTimestamp();
+        var chunks = FindVerifiedChunks(request);
+        var modeled = _orchestrator is not null
+            ? await _orchestrator.RunAsync(request.Message, chunks, start, cancellationToken) : null;
+        return modeled ?? _synthesizer.Synthesize(request.Message, chunks);
+    }
+
     public async IAsyncEnumerable<AssistantStreamEvent> StreamChatAsync(
         AssistantChatRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -67,6 +86,7 @@ public sealed class AssistantService : IAssistantService
             yield break;
         }
 
+        var start = _clock.GetTimestamp();
         var relevantChunks = FindVerifiedChunks(request);
 
         if (relevantChunks.Count == 0)
@@ -77,24 +97,35 @@ public sealed class AssistantService : IAssistantService
             yield break;
         }
 
-        yield return AssistantStreamEvent.Status(AssistantGroundingStatus.Grounded);
+        // Finish validation/accounting before emitting any model-path event. A disabled model
+        // retains the existing deterministic event order, citations and token segmentation.
+        var modeled = _orchestrator is not null
+            ? await _orchestrator.RunAsync(request.Message, relevantChunks, start, cancellationToken) : null;
+        var synthesis = modeled ?? _synthesizer.Synthesize(request.Message, relevantChunks);
+        yield return AssistantStreamEvent.Status(synthesis.GroundingStatus);
 
-        var topChunks = relevantChunks.Take(3).ToList();
-        foreach (var chunk in topChunks)
+        foreach (var citation in synthesis.Citations)
         {
-            yield return AssistantStreamEvent.CitationEvent(new AssistantCitation(
-                ChunkId: chunk.ChunkId,
-                DocumentId: chunk.DocumentId,
-                Slug: chunk.Slug,
-                Title: chunk.Title,
-                SectionHeading: chunk.SectionHeading,
-                SourceUrl: chunk.SourceUrl,
-                EvidenceStatus: chunk.EvidenceStatus,
-                Version: chunk.Version,
-                Claims: chunk.Claims));
+            yield return AssistantStreamEvent.CitationEvent(citation);
         }
 
-        var synthesis = _synthesizer.Synthesize(request.Message, relevantChunks);
+        if (modeled is not null)
+        {
+            // Preserve every canonical character, including spaces at token boundaries.
+            for (var offset = 0; offset < synthesis.Answer.Length;)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var length = Math.Min(40, synthesis.Answer.Length - offset);
+                if (offset + length < synthesis.Answer.Length
+                    && char.IsHighSurrogate(synthesis.Answer[offset + length - 1])
+                    && char.IsLowSurrogate(synthesis.Answer[offset + length])) length--;
+                yield return AssistantStreamEvent.Token(synthesis.Answer.Substring(offset, length));
+                offset += length;
+                await Task.Yield();
+            }
+            yield return AssistantStreamEvent.DoneEvent();
+            yield break;
+        }
 
         // Stream answer in small readable chunks to provide a natural SSE experience
         var words = synthesis.Answer.Split(' ');
