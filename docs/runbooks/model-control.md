@@ -41,6 +41,8 @@ taken atomically against the day, the month and the permit set before any paid w
   gated by `create_database = false`, has deletion protection, takes the stage runtime service
   accounts as input, and grants each only `roles/datastore.user` restricted by an IAM condition
   to this database. It is applied once, by the owner, never from a stage.
+  This stack also owns Firestore and Vertex API enablement in that shared project,
+  under the same gate, with no runtime predict permission or model activation.
 * Stage stacks (`deployment/gcp`) never declare the database. They receive its project and
   database id (`control_ledger_project_id`, `control_ledger_database_id`) and pass them to
   Cloud Run as `Assistant__ModelControl__Firestore__ProjectId` and `__DatabaseId`. Dev and prod
@@ -81,6 +83,39 @@ Logs carry correlation hashes, outcome codes and counts only.
 A reservation id is idempotent: a second reservation with the same id is denied, and a second
 call cannot start while one is in flight or after the call limit, so a duplicate cannot dispatch
 paid work twice.
+
+## Foundation activation
+
+Explicit owner approval is required for both the infrastructure changes and its
+usage costs. The named database has no free quota; reads, writes, storage and TTL
+deletes are billed separately from model admission. See [Firestore pricing](https://cloud.google.com/firestore/pricing).
+Creating an empty database is not initializing the allowance, sending inference,
+or changing a stage's runtime configuration.
+
+1. Keep one ignored variable file and state for the shared stack, with the
+   approved project, immutable database/location, `create_database = true` and
+   exact runtime accounts. Never pass credentials as Terraform inputs.
+2. When the Firestore API is disabled, use a reviewed, saved API-only Terraform
+   plan targeting `google_project_service.firestore` and
+   `google_project_service.vertex`. This is a bootstrap exception to routine
+   full planning: it permits a database inventory **before** attempting creation.
+   Apply only those two services; no runtime predict role is part of this stack.
+3. List database metadata after enablement. If the intended database exists,
+   verify its identity, mode and location before adopting it into the one state;
+   stop on mismatch. Never create a second database or reset existing documents
+   to bypass counters. Do not inspect unrelated document content.
+4. Review/apply the full saved shared-stack plan: the single Native database,
+   two `expiresAt` TTL policies and database-conditioned runtime access. Reject
+   unexpected deletes, replacements, public/broad roles or stage-service changes.
+5. Verify API state, database location/mode and deletion protection, both TTL
+   policies, exact IAM condition and a final full no-change plan. TTL enablement
+   and physical deletion are asynchronous; never claim cleanup from an accepted
+   operation alone. Preserve the private variable file and recoverable state.
+
+No application documents are written by this preparation. Ledger initialization,
+operator recovery checks, provider configuration, runtime release and synthetic
+inference smoke remain separate approved steps. Do not apply the GCP stage stack
+as a side effect, promote `main`, change DNS/secrets or enable visitor model work.
 
 ## Failure rules
 

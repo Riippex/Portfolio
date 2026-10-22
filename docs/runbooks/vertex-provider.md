@@ -47,6 +47,12 @@ deployment definitions do not activate this provider; console rollout remains a
 separately reviewed change. Preserve Terraform ownership and do not create drift
 by silently editing the service outside its reviewed configuration.
 
+`deployment/control-ledger` owns both shared project APIs, gated with the single
+database foundation. API enablement alone grants no runtime prediction permission,
+sets no review switch and sends no model input. Follow the [foundation sequence](model-control.md#foundation-activation)
+before the separate provider activation below; stage stacks must not own a second
+copy of these shared API resources.
+
 ## Request and accounting contract
 
 The adapter sends one text-only request with system instructions, question and

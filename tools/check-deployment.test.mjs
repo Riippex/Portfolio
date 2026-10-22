@@ -189,6 +189,11 @@ const cases = [
   ["runbook omits admission before assets", RUNBOOK, replace(/run_worker_first/g, "assets_first"), "documentation"],
 
   // The shared model control database
+  ["shared Vertex API absent", LEDGER_MAIN, replace('"google_project_service" "vertex"', '"google_project_service" "other"'), "model-control"],
+  ["shared Vertex API not gated", LEDGER_MAIN, replace('resource "google_project_service" "vertex" {\n  count = var.create_database ? 1 : 0', 'resource "google_project_service" "vertex" {\n  count = 1'), "model-control"],
+  ["shared Firestore API not gated", LEDGER_MAIN, replace('resource "google_project_service" "firestore" {\n  count = var.create_database ? 1 : 0', 'resource "google_project_service" "firestore" {\n  count = 1'), "model-control"],
+  ["shared Vertex API disabled on removal", LEDGER_MAIN, replace(/(service\s*= "aiplatform\.googleapis\.com"\n  disable_on_destroy = )false/, "$1true"), "model-control"],
+  ["shared Vertex API points to another service", LEDGER_MAIN, replace('service            = "aiplatform.googleapis.com"', 'service            = "generativelanguage.googleapis.com"'), "model-control"],
   ["database created without activation", LEDGER_VARS, replace(/(variable "create_database"[\s\S]*?default\s*=\s*)false/, "$1true"), "model-control"],
   ["database not gated by create_database", LEDGER_MAIN, replace("count = var.create_database ? 1 : 0\n\n  project     = var.project_id\n  name ", "count = 1\n\n  project     = var.project_id\n  name "), "model-control"],
   ["database deletion protection dropped", LEDGER_MAIN, replace('delete_protection_state           = "DELETE_PROTECTION_ENABLED"', 'delete_protection_state           = "DELETE_PROTECTION_DISABLED"'), "model-control"],
@@ -205,6 +210,7 @@ const cases = [
   ["a second grant resource", LEDGER_MAIN, append('resource "google_project_iam_binding" "extra" {\n  role = "roles/datastore.user"\n}'), "model-control"],
   ["a stage declares the database", GCP_MAIN, append('resource "google_firestore_database" "own" {}'), "model-control"],
   ["a stage enables the Firestore API", GCP_APIS, replace('"cloudresourcemanager.googleapis.com",', '"cloudresourcemanager.googleapis.com",\n    "firestore.googleapis.com",'), "model-control"],
+  ["a stage enables the shared Vertex API", GCP_APIS, replace('"cloudresourcemanager.googleapis.com",', '"cloudresourcemanager.googleapis.com",\n    "aiplatform.googleapis.com",'), "model-control"],
   ["the stage drops the project id", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__ProjectId"  = var.control_ledger_project_id', '"Assistant__ModelControl__Firestore__ProjectId"  = "other-project"'), "model-control"],
   ["the stage drops the database id", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id', '"Assistant__ModelControl__Firestore__DatabaseId" = "own-database"'), "model-control"],
   ["the stage allows one half of the pair", GCP_MAIN, replace('(var.control_ledger_project_id == "") == (var.control_ledger_database_id == "")', "true"), "model-control"],

@@ -314,7 +314,10 @@ function ledgerPlan(work, label, state, vars, { destroy = false, save = false } 
   const args = ["plan", "-input=false", "-lock=false", "-refresh=false", "-no-color", `-state=${state}`];
   if (destroy) args.push("-destroy");
   if (save) args.push(`-out=${planPath}`);
-  for (const variable of ["project_id=synthetic-project", ...vars]) args.push("-var", variable);
+  // Operator checkouts may contain ignored activation inputs. Override every ledger
+  // root input so offline proofs cannot inherit real identities or an enabled gate.
+  for (const variable of ["project_id=synthetic-project", "location_id=us-central1", "database_id=portfolio-control",
+    "create_database=false", "runtime_service_accounts=[]", ...vars]) args.push("-var", variable);
   const result = terraform(ledgerDir, args);
   ledgerRunTexts.push(result.text);
   const changes = save && result.status === 0
@@ -372,6 +375,10 @@ function proveControlLedger(work) {
 
   run = ledgerPlan(work, "activated", empty, ["create_database=true"], { save: true });
   const byType = (type) => run.changes.filter((change) => change.type === type);
+  const apis = byType("google_project_service").map((change) => change.change.after);
+  record(JSON.stringify(apis.map((api) => api.service).sort()) === JSON.stringify(["aiplatform.googleapis.com", "firestore.googleapis.com"]),
+    "activation enables exactly the shared Vertex and Firestore APIs");
+  record(apis.every((api) => api.disable_on_destroy === false), "removing API resources never disables shared services");
   record(run.status === 0 && byType("google_firestore_database").length === 1, "activation creates exactly one database");
   const database = byType("google_firestore_database")[0]?.change.after;
   record(

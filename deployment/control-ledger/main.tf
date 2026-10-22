@@ -7,6 +7,8 @@
 # stacks (deployment/gcp) never declare it; they only receive its project and database id as
 # runtime configuration. Two copies of this database would be two independent allowances, so
 # creating it is gated, protected against deletion, and never done from a stage.
+# The same shared stack owns Firestore and Vertex API enablement in this project;
+# enabling an API grants no inference permission and does not enable a runtime model.
 #
 # The stack stores no data: documents are written only by the backend at run time (see
 # docs/runbooks/model-control.md). It holds no secret and takes no credential as an input.
@@ -28,6 +30,14 @@ resource "google_project_service" "firestore" {
 
   project            = var.project_id
   service            = "firestore.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "vertex" {
+  count = var.create_database ? 1 : 0
+
+  project            = var.project_id
+  service            = "aiplatform.googleapis.com"
   disable_on_destroy = false
 }
 

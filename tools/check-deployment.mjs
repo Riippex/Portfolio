@@ -701,6 +701,17 @@ export function checkDeployment(files) {
   if (!/default\s*=\s*false/.test(ledgerCreate)) {
     fail("model-control", "create_database must default to false so nothing is created without owner activation");
   }
+  const sharedApis = [...ledger.main.matchAll(/resource\s+"google_project_service"\s+"(\w+)"/g)].map((match) => match[1]).sort();
+  if (sharedApis.join() !== "firestore,vertex") {
+    fail("model-control", "the shared foundation must own exactly the Firestore and Vertex APIs");
+  }
+  for (const [name, service] of [["firestore", "firestore.googleapis.com"], ["vertex", "aiplatform.googleapis.com"]]) {
+    const api = resourceBlock(ledger.main, "google_project_service", name) ?? "";
+    if (!/count\s*=\s*var\.create_database\s*\?\s*1\s*:\s*0/.test(api) ||
+        /service\s*=\s*"([^"]+)"/.exec(api)?.[1] !== service || !/disable_on_destroy\s*=\s*false/.test(api)) {
+      fail("model-control", `${name} API must be explicitly gated and never disabled by removing its Terraform resource`);
+    }
+  }
   const ledgerDatabase = resourceBlock(ledger.main, "google_firestore_database", "control") ?? "";
   if (!/count\s*=\s*var\.create_database\s*\?\s*1\s*:\s*0/.test(ledgerDatabase)) {
     fail("model-control", "the control database must exist only when create_database is true");
@@ -732,7 +743,7 @@ export function checkDeployment(files) {
   if (/allUsers|allAuthenticatedUsers|roles\/(owner|editor|datastore\.owner|firebase)/.test(ledgerAll)) {
     fail("model-control", "the control database must not be granted to public principals or broad roles");
   }
-  if (/google_firestore|firestore\.googleapis\.com/.test(gcpAll)) {
+  if (/google_firestore|(?:firestore|aiplatform)\.googleapis\.com/.test(gcpAll)) {
     fail("model-control", "stage stacks must not declare the database or its APIs; the shared stack owns them");
   }
   if (!/Assistant__ModelControl__Firestore__ProjectId"\s*=\s*var\.control_ledger_project_id/.test(gcp.main) ||

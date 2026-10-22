@@ -22,7 +22,7 @@ variable "database_id" {
 
 variable "create_database" {
   type        = bool
-  description = "Activation gate. Leave false until the owner explicitly authorizes creating the shared control database; while false the stack declares and creates nothing. Apply this stack once per portfolio, never from a stage stack."
+  description = "Foundation activation gate. Leave false until the owner explicitly authorizes the shared control database and Firestore/Vertex API enablement; while false the stack declares and creates nothing. This never enables model inference. Apply once per portfolio, never from a stage stack."
   default     = false
 }
 
