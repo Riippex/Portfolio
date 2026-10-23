@@ -644,6 +644,14 @@ export function checkDeployment(files) {
   if (admitAt < 0 || dispatchAt < 0 || admitAt > dispatchAt) {
     fail("stage-admission", "the Worker entry must admit the request before handing it to the application");
   }
+  const refusalAt = entrySource.search(/if\s*\(decision\.action === "respond"\)\s*return decision\.response;/);
+  const assetDispatchAt = entrySource.search(/\bASSETS\.fetch\(/);
+  if (admitAt < 0 || refusalAt < admitAt || assetDispatchAt < refusalAt || dispatchAt < refusalAt) {
+    fail("stage-admission", "the Worker entry must return admission refusals before application or asset dispatch");
+  }
+  if (!/return\s+\w+\.ASSETS\.fetch\(decision\.request\)/.test(entrySource)) {
+    fail("stage-admission", "the Worker entry must explicitly dispatch admitted compiled assets through ASSETS using the sanitized request");
+  }
   if (typeof files["frontend/src/middleware.ts"] === "string") {
     fail("stage-admission", "frontend/src/middleware.ts must not exist: admission lives in the Worker entry, not in application middleware");
   }

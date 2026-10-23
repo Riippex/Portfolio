@@ -47,6 +47,16 @@ The deployment stage (`dev`, `staging`, `prod`) is a separate input, `environmen
 
 **Rollout order.** A backend image that includes this change refuses to start without `Portfolio__Stage`, and the deploy job refuses a Worker without `TEAM_ALLOWLIST`. For an existing stage: set `TEAM_ALLOWLIST` on its Worker, apply `deployment/gcp` for the stage so the service carries `Portfolio__Stage` (a Terraform apply creates a new revision; it never replaces the deploy-owned image), and only then run the deploy workflow. The frontend and backend must be deployed together, because the version 1 colon-delimited identity is no longer accepted by the backend.
 
+**Compiled asset dispatch.** With `assets.run_worker_first = true`, the Worker
+must explicitly serve admitted `GET` and `HEAD /_next/static/*` requests through
+`env.ASSETS.fetch`. The Vinext application handler alone returns a missing-asset
+response for these compiled JS/CSS paths. Admission always runs first, and the
+asset response (including content type, cache validators and genuine 404s) is
+returned unchanged. A missing asset binding returns an uncacheable 503, never
+application HTML. Other paths and methods stay with Vinext. During rollout,
+fetch the JS/CSS URLs actually referenced by the rendered HTML and check their
+status and content type; a 200 page alone does not prove a working browser UI.
+
 ## Shared model control database
 
 The Assistant's budget ledger needs exactly one Firestore database for the whole portfolio, so

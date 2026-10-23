@@ -16,8 +16,8 @@
     "not_found_handling": "none",
     "binding": "ASSETS",
     // Without this Cloudflare answers static asset requests before any Worker code runs, so
-    // the dev allowlist would not cover assets. The Vinext handler serves them through the
-    // ASSETS binding after admission.
+    // the dev allowlist would not cover assets. The Worker explicitly serves compiled
+    // JS/CSS through ASSETS after admission; other routes remain with Vinext.
     "run_worker_first": true
   },
   // Plaintext values are per environment (vars and ratelimits are not inherited), so every

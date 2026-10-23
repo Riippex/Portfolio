@@ -20,14 +20,115 @@ describe("Worker entry", () => {
   });
 
   it("denies before the application or assets are reached in dev", async () => {
+    const assetFetch = vi.fn();
     for (const path of ["/", "/_next/static/chunks/app.js", "/_next/image?url=%2Fx&w=64&q=75", "/favicon.ico", "/api/jobs/analyze"]) {
       const response = await worker.fetch(
         new Request(`https://dev.example${path}`, { headers: { "CF-Connecting-IP": "198.51.100.8" } }),
-        devEnv(),
+        { ...devEnv(), ASSETS: { fetch: assetFetch } },
         ctx
       );
       expect(response.status).toBe(403);
     }
+    expect(handlerFetch).not.toHaveBeenCalled();
+    expect(assetFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["/_next/static/chunks/app.js?dpl=synthetic", "text/javascript"],
+    ["/_next/static/css/app.css", "text/css"],
+  ])("serves admitted compiled asset %s without invoking Vinext", async (path, contentType) => {
+    const assetResponse = new Response("asset", { headers: { "Content-Type": contentType, ETag: '"synthetic"' } });
+    const assetFetch = vi.fn(async () => assetResponse);
+    const response = await worker.fetch(
+      new Request(`https://dev.example${path}`, { headers: {
+        "CF-Connecting-IP": TEAM_IP, "X-Portfolio-Identity": "forged", "X-Portfolio-Identity-Proof": "forged",
+      } }),
+      { ...devEnv(), ASSETS: { fetch: assetFetch } }, ctx
+    );
+    expect(response).toBe(assetResponse);
+    expect(response.headers.get("Content-Type")).toBe(contentType);
+    expect(response.headers.get("ETag")).toBe('"synthetic"');
+    expect(assetFetch).toHaveBeenCalledTimes(1);
+    const [forwarded] = (assetFetch.mock.calls as unknown as [Request][])[0];
+    expect(forwarded.url).toBe(`https://dev.example${path}`);
+    expect(forwarded.headers.get("X-Portfolio-Identity")).toBeNull();
+    expect(forwarded.headers.get("X-Portfolio-Identity-Proof")).toBeNull();
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves HEAD when dispatching an admitted asset", async () => {
+    const assetFetch = vi.fn(async () => new Response(null, { headers: { "Content-Type": "text/css" } }));
+    const response = await worker.fetch(
+      new Request("https://dev.example/_next/static/css/app.css", { method: "HEAD", headers: { "CF-Connecting-IP": TEAM_IP } }),
+      { ...devEnv(), ASSETS: { fetch: assetFetch } }, ctx
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
+    expect((assetFetch.mock.calls as unknown as [Request][])[0][0].method).toBe("HEAD");
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves missing-asset 404 instead of falling back to application HTML", async () => {
+    const missing = new Response("Not Found", { status: 404 });
+    const response = await worker.fetch(
+      new Request("https://dev.example/_next/static/missing.js", { headers: { "CF-Connecting-IP": TEAM_IP } }),
+      { ...devEnv(), ASSETS: { fetch: vi.fn(async () => missing) } }, ctx
+    );
+    expect(response).toBe(missing);
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "[]", "not-json"])("never reaches assets with absent, empty or invalid dev allowlist %j", async (allowlist) => {
+    const assetFetch = vi.fn();
+    const response = await worker.fetch(
+      new Request("https://dev.example/_next/static/app.js", { headers: { "CF-Connecting-IP": TEAM_IP } }),
+      { ...devEnv(), TEAM_ALLOWLIST: allowlist, ASSETS: { fetch: assetFetch } }, ctx
+    );
+    expect(response.status).toBe(503);
+    expect(assetFetch).not.toHaveBeenCalled();
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
+  it("serves public prod compiled assets without requiring team membership", async () => {
+    const assetFetch = vi.fn(async () => new Response("asset"));
+    const response = await worker.fetch(
+      new Request("https://portfolio.example/_next/static/app.js", { headers: { "CF-Connecting-IP": "198.51.100.8" } }),
+      { PORTFOLIO_STAGE: "prod", ASSETS: { fetch: assetFetch } }, ctx
+    );
+    expect(await response.text()).toBe("asset");
+    expect(assetFetch).toHaveBeenCalledTimes(1);
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["/", "/projects/vextis", "/api/example", "/_next/image?url=%2Ffile.svg&w=64&q=75", "/_next/static-other/app.js"])(
+    "keeps non-compiled route %s in Vinext", async (path) => {
+      const assetFetch = vi.fn();
+      const response = await worker.fetch(
+        new Request(`https://dev.example${path}`, { headers: { "CF-Connecting-IP": TEAM_IP } }),
+        { ...devEnv(), ASSETS: { fetch: assetFetch } }, ctx
+      );
+      expect(await response.text()).toBe("app");
+      expect(handlerFetch).toHaveBeenCalledTimes(1);
+      expect(assetFetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not turn POST to a compiled asset path into an asset read", async () => {
+    const assetFetch = vi.fn();
+    await worker.fetch(
+      new Request("https://dev.example/_next/static/app.js", { method: "POST", headers: { "CF-Connecting-IP": TEAM_IP } }),
+      { ...devEnv(), ASSETS: { fetch: assetFetch } }, ctx
+    );
+    expect(assetFetch).not.toHaveBeenCalled();
+    expect(handlerFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when the asset binding is unavailable", async () => {
+    const response = await worker.fetch(
+      new Request("https://dev.example/_next/static/app.js", { headers: { "CF-Connecting-IP": TEAM_IP } }), devEnv(), ctx
+    );
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(handlerFetch).not.toHaveBeenCalled();
   });
 
