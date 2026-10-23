@@ -163,6 +163,7 @@ jobs:
           CLOUDFLARE_ENV: ${{ inputs.environment }}
           PORTFOLIO_BACKEND_URL: ${{ vars.PORTFOLIO_BACKEND_URL }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+          NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL: ${{ vars.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL }}
 
       # The generated Worker configuration must carry this stage's explicit PORTFOLIO_STAGE,
       # the rate-limit bindings, and the admission entry. Offline; reads the build output only.

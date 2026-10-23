@@ -34,6 +34,16 @@ no application transcript/consent storage, and withdrawal for future submissions
 The frontend displays this notice before the initially unchecked choice and
 links Google's retention information. Contact consent is separate.
 
+The privacy channel is a direct `mailto:` link to the owner's approved public
+alias, independent of the website Contact relay. The build receives it through
+`NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL`; never set the private forwarding inbox.
+Missing or malformed configuration displays an unavailable notice, disables the
+model checkbox and omits model consent from submissions; deterministic chat
+remains available. This UI readiness check is not backend authorization or a
+substitute for the provider activation review. No email is sent automatically.
+The notice version stays unchanged: this corrects the contact channel without
+changing provider, purpose, location, data scope or retention.
+
 Missing/null, false, stale, incorrectly typed, duplicate/unknown inner properties,
 or otherwise malformed optional consent is denied, not guessed/coerced. An
 otherwise valid request still gets the deterministic evidence-based path. An

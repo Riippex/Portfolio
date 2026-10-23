@@ -545,6 +545,9 @@ export function checkDeployment(files) {
   if (!buildStep || /secrets\./.test(buildStep)) {
     fail("secret-state", "the frontend build step must exist and receive no secrets");
   }
+  if (!/NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL:\s*\$\{\{\s*vars\.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL\s*\}\}/.test(buildStep)) {
+    fail("runtime-config", "the frontend build must receive the environment-scoped public privacy alias from vars");
+  }
   if (/secrets\./.test(ci)) {
     fail("secret-state", "ci.yml must not use secrets");
   }

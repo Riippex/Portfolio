@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const streamAssistantChat = vi.fn();
 const prepareAssistantChatRequest = vi.fn();
@@ -25,9 +25,14 @@ async function submitQuestion(text: string) {
 }
 
 describe("AssistantChat request preparation failures", () => {
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL", "privacy@example.test");
+  });
+
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("introduces the assistant as R AI while retaining the portfolio owner's name", () => {
@@ -95,8 +100,31 @@ describe("AssistantChat request preparation failures", () => {
     expect(screen.getByText(/Optional Google AI:/).textContent).toContain("not zero retention");
     expect(screen.getByText(/Optional Google AI:/).textContent).toContain("no fixed-country guarantee");
     expect(screen.getByRole("link", { name: /Google's processing/ }).getAttribute("href")).toContain("docs.cloud.google.com/");
-    expect(screen.getByRole("link", { name: "Contact section" }).getAttribute("href")).toBe("#contact");
+    expect(screen.getByRole("link", { name: "privacy@example.test" }).getAttribute("href")).toBe("mailto:privacy@example.test");
+    expect(screen.queryByRole("link", { name: "Contact section" })).toBeNull();
+    expect(screen.getByText(/Rafael Patiño operates/).textContent).toContain("independent of the website Contact form");
 
+    await submitQuestion("Tell me about Expinn");
+    await waitFor(() => expect(streamAssistantChat).toHaveBeenCalledTimes(1));
+    expect(streamAssistantChat.mock.calls[0][0]).toEqual({ message: "Tell me about Expinn" });
+  });
+
+  it.each([
+    undefined, "", " ", "not-a-mailbox", " privacy@example.test", "privacy@example.test\n",
+    "privacy@example.test?bcc=other@example.test", "privacy@example.test%0d%0aBcc:other@example.test",
+    "mailto:privacy@example.test", "Person <privacy@example.test>", "privacy@example.test,other@example.test",
+    "privacy@-example.test", "privacy@example-.test", `${"a".repeat(65)}@example.test`,
+    `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.test`,
+  ])("keeps model choice closed and deterministic chat available for invalid contact %s", async (value) => {
+    vi.stubEnv("NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL", value);
+    prepareSuccessfulTurn();
+    render(<AssistantChat />);
+    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(true);
+    fireEvent.click(checkbox);
+    expect(screen.getByText(/The privacy contact is not configured/)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /@/ })).toBeNull();
     await submitQuestion("Tell me about Expinn");
     await waitFor(() => expect(streamAssistantChat).toHaveBeenCalledTimes(1));
     expect(streamAssistantChat.mock.calls[0][0]).toEqual({ message: "Tell me about Expinn" });

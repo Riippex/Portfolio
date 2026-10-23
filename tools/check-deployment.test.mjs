@@ -88,6 +88,8 @@ const cases = [
   ["Terraform stages drift from wrangler", CF_VARS, replace('["dev", "prod"]', '["dev", "staging", "prod"]'), "worker-alignment"],
   ["route targets another name", CF_MAIN, replace("script_name = local.worker_name", 'script_name = "frontend"'), "worker-alignment"],
   ["build does not select the stage", DEPLOY, replace("CLOUDFLARE_ENV: ${{ inputs.environment }}", "UNUSED: 1"), "worker-alignment"],
+  ["build omits the public privacy alias", DEPLOY, replace("NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL: ${{ vars.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL }}", ""), "runtime-config"],
+  ["build hardcodes the public privacy alias", DEPLOY, replace("NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL: ${{ vars.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL }}", "NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL: privacy@example.test"), "runtime-config"],
   ["deploy omits the runtime variable", DEPLOY, replace(' --var "PORTFOLIO_BACKEND_URL:${BACKEND_URL}"', ""), "runtime-config"],
   ["deploy omits the secret gate", DEPLOY, replace("wrangler secret list --name", "wrangler whoami --name"), "runtime-config"],
 

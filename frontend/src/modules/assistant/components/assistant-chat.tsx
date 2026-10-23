@@ -5,6 +5,7 @@ import type { AssistantChatMessage, AssistantCitation, AssistantGroundingStatus 
 import { MODEL_PROCESSING_NOTICE_VERSION } from "../model";
 import { streamAssistantChat } from "../api";
 import { prepareAssistantChatRequest } from "../turnstile";
+import { privacyContactEmail } from "../privacy-contact";
 import Link from "next/link";
 
 const INITIAL_MESSAGES: readonly AssistantChatMessage[] = [
@@ -23,6 +24,7 @@ const SUGGESTIONS = [
 ];
 
 export function AssistantChat() {
+  const privacyEmail = privacyContactEmail(process.env.NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL);
   const [messages, setMessages] = useState<readonly AssistantChatMessage[]>(INITIAL_MESSAGES);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -79,7 +81,7 @@ export function AssistantChat() {
     let preparation;
     try {
       preparation = await prepareAssistantChatRequest(trimmed, undefined,
-        allowModelProcessing ? { accepted: true, noticeVersion: MODEL_PROCESSING_NOTICE_VERSION } : undefined);
+        allowModelProcessing && privacyEmail ? { accepted: true, noticeVersion: MODEL_PROCESSING_NOTICE_VERSION } : undefined);
     } catch {
       preparation = { kind: "verification_failed" as const };
     }
@@ -250,18 +252,22 @@ export function AssistantChat() {
         <label className="assistant-model-choice">
           <input
             type="checkbox"
-            checked={allowModelProcessing}
+            checked={allowModelProcessing && !!privacyEmail}
             onChange={(e) => setAllowModelProcessing(e.target.checked)}
-            disabled={isStreaming}
+            disabled={isStreaming || !privacyEmail}
             aria-describedby="assistant-model-notice"
           />
           <span>I allow Google AI processing as described above for my questions in this open chat.</span>
         </label>
+        {!privacyEmail && (
+          <p role="status">The privacy contact is not configured. Optional Google AI is unavailable; you can still ask without the external model.</p>
+        )}
         <details>
           <summary>Privacy details and changing your choice</summary>
           <p>
             Rafael Patiño operates this portfolio. For privacy questions or rights requests,
-            use the <a href="#contact">Contact section</a>. Do not send sensitive information or
+            {privacyEmail ? <> email <a href={`mailto:${privacyEmail}`}>{privacyEmail}</a>.</> : <> the privacy email is currently unavailable.</>}
+            {" "}This channel is independent of the website Contact form. Do not send sensitive information or
             someone else&apos;s personal data. R AI sends only the current turn, not your chat history;
             the application does not save a transcript or this choice. Reloading resets
             this choice. Uncheck it before your next question to stop future model

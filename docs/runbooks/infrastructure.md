@@ -161,7 +161,17 @@ The workflow names an environment per target, but protection is configured in re
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account |
 | Variable | `PORTFOLIO_BACKEND_URL` | Cloud Run URL (`https`), written to the Worker as runtime configuration |
 | Variable | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Public site key from the console-managed widget |
+| Variable | `NEXT_PUBLIC_PRIVACY_CONTACT_EMAIL` | Owner-approved public privacy alias, baked into the client bundle; never the private forwarding destination |
 | Secret | `CLOUDFLARE_API_TOKEN` | Workers deploy and secret-list permission only |
+
+Set the public privacy alias separately in each GitHub environment before
+building its release (for example `privacy@example.test` in synthetic checks).
+It is intentionally public, not a secret; real values stay out of tracked files.
+For workstation development use the ignored `frontend/.env.local`. A rebuild
+is required after changes. Missing/invalid values disable the frontend's optional
+model choice, not deterministic chat, and never fall back to the Contact form.
+Verify the alias receives mail before activation. Configuring the alias does not
+enable the model, activate Contact sending, or establish mailbox cleanup.
 
 ### Cloud trust
 
