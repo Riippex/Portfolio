@@ -2,6 +2,7 @@ import { AssistantChat } from "@/modules/assistant/components/assistant-chat";
 import { ContactForm } from "@/modules/contact/components/contact-form";
 import { JobMatcher } from "@/modules/job-matching/components/job-matcher";
 import { getProfile, getSelectedProjects } from "@/modules/portfolio/api";
+import { BrandMark } from "@/shared/brand/brand-mark";
 import Link from "next/link";
 
 export default async function Home() {
@@ -17,7 +18,7 @@ export default async function Home() {
     <main>
       <nav className="shell nav" aria-label="Primary navigation">
         <a className="wordmark" href="#top" aria-label="Rafael portfolio home">
-          RP<span>/</span>
+          <BrandMark />
         </a>
         <div className="nav-links">
           <a href="#work">Work</a>

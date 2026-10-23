@@ -1,4 +1,5 @@
 import { getProjectBySlug } from "@/modules/portfolio/api";
+import { BrandMark } from "@/shared/brand/brand-mark";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -49,7 +50,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
     <main>
       <nav className="shell nav" aria-label="Primary navigation">
         <Link className="wordmark" href="/" aria-label="Rafael portfolio home">
-          RP<span>/</span>
+          <BrandMark />
         </Link>
         <div className="nav-links">
           <Link href="/#work">Work</Link>

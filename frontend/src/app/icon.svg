@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none" color="#f1efe8">
+  <title>Rafael portfolio — R Cut</title>
+  <rect width="128" height="128" rx="24" fill="#11110f"/>
+  <path fill="currentColor" fill-rule="evenodd" d="M24 20H67C89 20 103 32 103 51C103 66 95 77 81 81L107 108H81L57 83H44V108H24V20ZM44 38V65H65C77 65 83 60 83 51C83 42 77 38 65 38H44Z"/>
+  <path fill="#c7ff36" d="M66 83H80L94 98H80L66 83Z"/>
+</svg>
