@@ -42,10 +42,53 @@ be explicitly reviewed and set by the operator, not a visitor:
 | `Assistant:ModelControl:Tariff:*` | Explicit model, version, integer rates and near-term expiry |
 
 Environment variables use double underscores in place of colons. These switches
-are assertions of completed operator checks, not permission to skip them. Current
-deployment definitions do not activate this provider; console rollout remains a
-separately reviewed change. Preserve Terraform ownership and do not create drift
+are assertions of completed operator checks, not permission to skip them. Default
+deployment inputs do not activate this provider; rollout remains a separately
+reviewed change. Preserve Terraform ownership and do not create drift
 by silently editing the service outside its reviewed configuration.
+
+### Terraform-owned preparation
+
+`deployment/gcp/vertex.tf` defines one optional `vertex` object. Its default is
+`null`: no Vertex environment, tariff, custom role or predict binding is planned,
+including for existing dev/prod inputs. The shared ledger project/database pair
+remains independent; the shared stack still owns its APIs, database and TTLs.
+
+The [stage example](../../deployment/gcp/terraform.tfvars.example) shows a
+disabled preparation object. Location must explicitly be `global`, matching the
+recorded owner choice/current visitor notice, and tariff version, integer rates
+and date are required with no defaults. Terraform checks format and reviewed
+price floors; the backend remains authoritative for expiry, the 31-day horizon,
+budget, consent and all runtime checks. Changing the location/model requires a
+new review, not a visitor-provided override.
+
+All five booleans default to false: `enabled`, `grant_predict_access`,
+`data_policy_reviewed`, `token_counting_reviewed`, `recovery_ready`. Setting
+`enabled` requires the other four. A configured object requires the same-project
+shared ledger; granting predict also requires the service phase and dev/prod.
+These checks establish configuration consistency, not that a review happened.
+
+`grant_predict_access` independently plans a stage-specific project custom role
+with exactly `aiplatform.endpoints.predict` and one additive binding to the
+backend runtime account. It grants nothing to CI, the Worker or visitors. This
+permission supports [custom roles](https://cloud.google.com/iam/docs/custom-roles-permissions-support)
+and is required by [CountTokens](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/rest/v1/projects.locations.endpoints/countTokens)
+and [generation](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/rest/v1/projects.locations.publishers.models/generateContent).
+The role is **project-scoped, not a per-model restriction**: the backend pins the
+model, but a compromised runtime identity could invoke other models/endpoints
+in that project. Do not describe this grant as an IAM model allowlist. No broad
+predefined role or service-account key is needed. The pinned provider's
+[custom-role resource](https://github.com/hashicorp/terraform-provider-google/blob/v6.50.0/website/docs/r/google_project_iam_custom_role.html.markdown)
+has soft-delete/name-reuse constraints; review the actual saved plan before
+recreating a previously deleted role.
+
+Permission-only preparation can keep `enabled = false`; it still needs explicit
+IAM/apply approval. Model-disabled rollback uses `enabled = false` without
+deleting counters or making any claim that a remote request was cancelled.
+Revoking the access gate removes the binding/role and needs its own reviewed
+plan. Terraform never sets `InitializeStore`; initialization and recovery remain
+separately authorized operator actions. No setting is applied by merely editing
+or testing these definitions. Main, production and Contact stay separate gates.
 
 `deployment/control-ledger` owns both shared project APIs, gated with the single
 database foundation. API enablement alone grants no runtime prediction permission,

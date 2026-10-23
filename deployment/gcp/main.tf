@@ -165,6 +165,14 @@ resource "google_cloud_run_v2_service" "backend" {
         }
       }
 
+      dynamic "env" {
+        for_each = local.vertex_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       env {
         name  = "Contact__Enabled"
         value = "false"
@@ -224,10 +232,16 @@ resource "google_cloud_run_v2_service" "backend" {
       condition     = contains(["dev", "prod"], var.environment)
       error_message = "The backend serves only the dev and prod stages (Portfolio__Stage); it refuses to start for any other stage name."
     }
+
+    precondition {
+      condition     = var.vertex == null ? true : (var.control_ledger_project_id == var.project_id && var.control_ledger_database_id != "")
+      error_message = "Vertex requires the shared control ledger in the same project."
+    }
   }
 
   depends_on = [
-    google_secret_manager_secret_iam_member.runtime_accessor
+    google_secret_manager_secret_iam_member.runtime_accessor,
+    google_project_iam_member.vertex_predict
   ]
 }
 

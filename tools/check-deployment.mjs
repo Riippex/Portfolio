@@ -17,6 +17,7 @@ export const CHECKED_FILES = [
   "deployment/gcp/outputs.tf",
   "deployment/gcp/variables.tf",
   "deployment/gcp/versions.tf",
+  "deployment/gcp/vertex.tf",
   "deployment/gcp/wif.tf",
   "deployment/gcp/terraform.tfvars.example",
   "deployment/cloudflare/main.tf",
@@ -259,6 +260,7 @@ export function checkDeployment(files) {
     variables: stripHcl(need("deployment/gcp/variables.tf")),
     outputs: stripHcl(need("deployment/gcp/outputs.tf")),
     versions: stripHcl(need("deployment/gcp/versions.tf")),
+    vertex: stripHcl(need("deployment/gcp/vertex.tf")),
   };
   const gcpAll = Object.values(gcp).join("\n");
   const gcpTfvars = need("deployment/gcp/terraform.tfvars.example");
@@ -475,7 +477,10 @@ export function checkDeployment(files) {
   if (unexpected.length > 0 || roles.length !== ALLOWED_DEPLOYER_ROLES.length) {
     fail("deployer-scope", `the deployer must hold exactly ${ALLOWED_DEPLOYER_ROLES.join(", ")}; found ${roles.join(", ")}`);
   }
-  if (/google_project_iam_(member|binding|policy)|google_organization_iam|google_folder_iam|credentials_json/.test(gcpAll + deploy)) {
+  const projectGrants = [...(gcpAll + deploy).matchAll(/resource\s+"(google_project_iam_(?:member|binding|policy))"\s+"([^"]+)"/g)];
+  if (projectGrants.length !== 1 || projectGrants[0]?.[1] !== "google_project_iam_member" ||
+      projectGrants[0]?.[2] !== "vertex_predict" ||
+      /google_organization_iam|google_folder_iam|credentials_json/.test(gcpAll + deploy)) {
     fail("deployer-scope", "deployer permissions must stay resource-scoped and keyless");
   }
   const condition = /attribute_condition\s*=\s*"([^"]+)"/.exec(gcp.wif)?.[1] ?? "";
@@ -764,8 +769,59 @@ export function checkDeployment(files) {
   if (!/\(var\.control_ledger_project_id == ""\)\s*==\s*\(var\.control_ledger_database_id == ""\)/.test(gcp.main)) {
     fail("model-control", "a stage must set the shared database's project and id together or not at all");
   }
-  if (/Assistant__ModelControl__(Tariff|InitializeStore)/.test(gcpAll)) {
-    fail("model-control", "Terraform must not configure a tariff or initialize the store: paid model use stays disabled until a separate activation");
+  const outsideVertex = Object.entries(gcp).filter(([name]) => name !== "vertex").map(([, text]) => text).join("\n");
+  if (/Assistant__ModelControl__InitializeStore/.test(gcpAll) || /Assistant__ModelControl__Tariff/.test(outsideVertex)) {
+    fail("model-control", "Terraform must never initialize the store; tariffs belong only in the optional reviewed Vertex configuration");
+  }
+
+  // Optional provider wiring: absent by default, with independent IAM and model gates.
+  const vertexVariable = hclBlock(gcp.vertex, /variable\s+"vertex"/) ?? "";
+  if (!/default\s*=\s*null/.test(vertexVariable) ||
+      !/vertex_env\s*=\s*var\.vertex == null \? \{\} : \{/.test(gcp.vertex) ||
+      !/for_each\s*=\s*local\.vertex_env/.test(container)) {
+    fail("vertex-config", "Vertex must default to null and emit settings only through its gated container environment");
+  }
+  for (const flag of ["enabled", "grant_predict_access", "data_policy_reviewed", "token_counting_reviewed", "recovery_ready"]) {
+    if (!new RegExp(`\\b${flag}\\s*=\\s*optional\\(bool, false\\)`).test(vertexVariable)) {
+      fail("vertex-config", `Vertex ${flag} must default to false`);
+    }
+  }
+  if (!/!var\.vertex\.enabled \|\| \(/.test(vertexVariable) ||
+      !/var\.vertex\.grant_predict_access && var\.vertex\.data_policy_reviewed &&\s*var\.vertex\.token_counting_reviewed && var\.vertex\.recovery_ready/.test(vertexVariable) ||
+      !/var\.vertex == null \? true : \(var\.control_ledger_project_id == var\.project_id && var\.control_ledger_database_id != ""\)/.test(serviceBlock)) {
+    fail("vertex-config", "Vertex enablement requires all reviews, predict access and the same-project shared ledger");
+  }
+  const modelMappings = {
+    "Vertex__Enabled": "tostring(var.vertex.enabled)", "Vertex__ProjectId": "var.project_id",
+    "Vertex__Location": "var.vertex.location", "Vertex__DataPolicyReviewed": "tostring(var.vertex.data_policy_reviewed)",
+    "Vertex__TokenCountingReviewed": "tostring(var.vertex.token_counting_reviewed)", "Vertex__RecoveryReady": "tostring(var.vertex.recovery_ready)",
+    "ModelControl__Tariff__Version": "var.vertex.tariff.version", "ModelControl__Tariff__ModelId": '"gemini-3.1-flash-lite"',
+    "ModelControl__Tariff__InputMicroUsdPerMillionTokens": "tostring(var.vertex.tariff.input_micro_usd_per_million)",
+    "ModelControl__Tariff__OutputMicroUsdPerMillionTokens": "tostring(var.vertex.tariff.output_micro_usd_per_million)",
+    "ModelControl__Tariff__ValidThroughUtc": "var.vertex.tariff.valid_through_utc",
+  };
+  for (const [key, value] of Object.entries(modelMappings)) {
+    if (!gcp.vertex.split("\n").some((line) => line.includes(`"Assistant__${key}"`) && line.split("=").slice(1).join("=").trim() === value)) {
+      fail("vertex-config", `Assistant__${key} must use its explicit reviewed source`);
+    }
+  }
+  const predictRole = resourceBlock(gcp.vertex, "google_project_iam_custom_role", "vertex_predict") ?? "";
+  const predictGrant = resourceBlock(gcp.vertex, "google_project_iam_member", "vertex_predict") ?? "";
+  const customRoles = [...gcpAll.matchAll(/resource\s+"google_project_iam_custom_role"\s+"([^"]+)"/g)];
+  if (customRoles.length !== 1 || listItems(bracketList(predictRole, /permissions\s*=/) ?? "").join() !== '"aiplatform.endpoints.predict"' ||
+      !/vertex_predict_access\s*=\s*try\(var\.vertex\.grant_predict_access, false\)/.test(gcp.vertex) ||
+      !/var\.create_service && contains\(\["dev", "prod"\], var\.environment\)/.test(predictRole) ||
+      !/role_id\s*=\s*"portfolioVertexPredict_\$\{var\.environment\}"/.test(predictRole) ||
+      !/role\s*=\s*google_project_iam_custom_role\.vertex_predict\[0\]\.name/.test(predictGrant) ||
+      !/member\s*=\s*"serviceAccount:\$\{google_service_account\.backend\.email\}"/.test(predictGrant) ||
+      !/var\.control_ledger_project_id == var\.project_id && var\.control_ledger_database_id != ""/.test(predictRole) ||
+      !/google_project_iam_member\.vertex_predict/.test(bracketList(serviceBlock, /depends_on\s*=/) ?? "")) {
+    fail("vertex-iam", "Only a gated single-permission role bound to the backend runtime is allowed, with stage and shared-ledger guards");
+  }
+  for (const block of [predictRole, predictGrant]) {
+    if (!/count\s*=\s*local\.vertex_predict_access \? 1 : 0/.test(block) || !/project\s*=\s*var\.project_id/.test(block)) {
+      fail("vertex-iam", "Predict role and binding require the explicit access gate and exact stage project");
+    }
   }
   if (!/Unresolved reservations \(`Active`, `Uncertain`\) have no expiry|unresolved reservation has no\s+expiresAt/i.test(ledgerAll + modelControlText(files)) ) {
     fail("model-control", "the control ledger definitions or runbook must state that unresolved reservations are never given an expiry");

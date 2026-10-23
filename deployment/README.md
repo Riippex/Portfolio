@@ -27,6 +27,7 @@ deployment/
 └── gcp/
     ├── apis.tf                    # Required service APIs, including federation APIs
     ├── main.tf                    # Registry, runtime account, secret containers, Cloud Run (gated)
+    ├── vertex.tf                  # Optional disabled-by-default model settings and gated runtime predict role
     ├── wif.tf                     # Workload Identity Pool, Provider, and CI deployer IAM
     ├── variables.tf               # Inputs, including the create_service bootstrap gate
     ├── outputs.tf                 # Service URI, repository, WIF provider, service accounts
@@ -54,6 +55,12 @@ Terraform ignores only the deploy-owned Cloud Run attributes and never declares 
 6. **Gated deployment**: manual only; authorize (target and branch), then validate the exact commit (including the published-backend integration smoke), then deploy. Only the backend job requests `id-token: write`.
 7. **One bounded durable record**: no application data is persisted. The only database is the shared model control ledger (`control-ledger/`), which holds operational accounting counters and opaque reservation metadata, gated and deletion-protected.
 8. **Ignored local state**: real `*.tfvars` and `*.tfstate` are git-ignored; example files hold placeholders.
+9. **Optional model preparation**: `vertex = null` preserves the disabled state.
+   A reviewed object can wire configuration with every boolean off. An independent
+   gate plans a custom predict-only project role for the backend, never CI or the
+   Worker. No store initialization or inference is performed. Model activation,
+   IAM/apply and production still need explicit approval; see the
+   [provider runbook](../docs/runbooks/vertex-provider.md#terraform-owned-preparation).
 
 ## Local Validation
 

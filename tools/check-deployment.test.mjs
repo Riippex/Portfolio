@@ -17,6 +17,7 @@ const GCP_MAIN = "deployment/gcp/main.tf";
 const GCP_WIF = "deployment/gcp/wif.tf";
 const GCP_APIS = "deployment/gcp/apis.tf";
 const GCP_VARS = "deployment/gcp/variables.tf";
+const GCP_VERTEX = "deployment/gcp/vertex.tf";
 const CF_VARS = "deployment/cloudflare/variables.tf";
 const CF_MAIN = "deployment/cloudflare/main.tf";
 const CF_VERSIONS = "deployment/cloudflare/versions.tf";
@@ -51,6 +52,24 @@ test("the real definitions satisfy every invariant", () => {
 });
 
 const cases = [
+  // Optional Vertex preparation must not activate or broaden runtime access.
+  ["Vertex loses its null default", GCP_VERTEX, replace('default = null', 'default = {}'), "vertex-config"],
+  ["Vertex settings emitted without a gate", GCP_VERTEX, replace('vertex_env = var.vertex == null ? {} : {', 'vertex_env = {'), "vertex-config"],
+  ["Vertex environment disconnected", GCP_MAIN, replace('for_each = local.vertex_env', 'for_each = {}'), "vertex-config"],
+  ...["enabled", "grant_predict_access", "data_policy_reviewed", "token_counting_reviewed", "recovery_ready"].map((flag) =>
+    [`Vertex ${flag} defaults on`, GCP_VERTEX, replace(new RegExp(`(${flag}\\s*=\\s*optional\\(bool, )false`), '$1true'), "vertex-config"]),
+  ["Vertex enablement loses reviews", GCP_VERTEX, replace('!var.vertex.enabled || (', 'true || ('), "vertex-config"],
+  ["Vertex enabled literal", GCP_VERTEX, replace('tostring(var.vertex.enabled)', '"true"'), "vertex-config"],
+  ["Vertex cross-project runtime", GCP_VERTEX, replace(/("Assistant__Vertex__ProjectId"\s*=\s*)var.project_id/, '$1"other-project"'), "vertex-config"],
+  ["Vertex model changed", GCP_VERTEX, replace('"gemini-3.1-flash-lite"', '"another-model"'), "vertex-config"],
+  ["Vertex fixed tariff", GCP_VERTEX, replace('tostring(var.vertex.tariff.input_micro_usd_per_million)', '"1"'), "vertex-config"],
+  ["Vertex predict role broadened", GCP_VERTEX, replace('["aiplatform.endpoints.predict"]', '["aiplatform.endpoints.predict", "aiplatform.models.delete"]'), "vertex-iam"],
+  ["Vertex predict grant always on", GCP_VERTEX, replace(/count = local.vertex_predict_access \? 1 : 0/g, 'count = 1'), "vertex-iam"],
+  ["Vertex predict gate bypassed", GCP_VERTEX, replace('try(var.vertex.grant_predict_access, false)', 'true'), "vertex-iam"],
+  ["Vertex predict granted to CI", GCP_VERTEX, replace('google_service_account.backend.email', 'google_service_account.ci_deployer.email'), "vertex-iam"],
+  ["Vertex broad predefined role", GCP_VERTEX, replace('role    = google_project_iam_custom_role.vertex_predict[0].name', 'role    = "roles/aiplatform.user"'), "vertex-iam"],
+  ["Vertex role not stage-specific", GCP_VERTEX, replace('portfolioVertexPredict_${var.environment}', 'portfolioVertexPredict'), "vertex-iam"],
+  ["Vertex initialization forbidden", GCP_VERTEX, append('locals { initialize = "Assistant__ModelControl__InitializeStore" }'), "model-control"],
   // Remote runtime safety
   ["remote runtime is Development", GCP_MAIN, replace('aspnetcore_environment = "Production"', 'aspnetcore_environment = "Development"'), "runtime-environment"],
   ["runtime environment follows the stage", GCP_MAIN, replace('aspnetcore_environment = "Production"', 'aspnetcore_environment = var.environment == "prod" ? "Production" : "Development"'), "runtime-environment"],
@@ -220,7 +239,7 @@ const cases = [
   ["the stage drops the project id", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__ProjectId"  = var.control_ledger_project_id', '"Assistant__ModelControl__Firestore__ProjectId"  = "other-project"'), "model-control"],
   ["the stage drops the database id", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id', '"Assistant__ModelControl__Firestore__DatabaseId" = "own-database"'), "model-control"],
   ["the stage allows one half of the pair", GCP_MAIN, replace('(var.control_ledger_project_id == "") == (var.control_ledger_database_id == "")', "true"), "model-control"],
-  ["Terraform configures a tariff", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id', '"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id\n    "Assistant__ModelControl__Tariff__Version" = "t"'), "model-control"],
+  ["Terraform configures a tariff outside the Vertex gate", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id', '"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id\n    "Assistant__ModelControl__Tariff__Version" = "t"'), "model-control"],
   ["Terraform initializes the store", GCP_MAIN, replace('"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id', '"Assistant__ModelControl__Firestore__DatabaseId" = var.control_ledger_database_id\n    "Assistant__ModelControl__InitializeStore" = "true"'), "model-control"],
   ["CI stops starting the emulator", CI, replace("gcloud emulators firestore start", "gcloud emulators other start"), "model-control"],
   ["CI stops pointing tests at the emulator", CI, replace("FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080", "UNUSED: 1"), "model-control"],

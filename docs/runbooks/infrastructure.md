@@ -68,8 +68,13 @@ the project and database id to the service (`control_ledger_project_id`, `contro
 or neither) and never declare a database, so a stage cannot create a second allowance. Order: apply the
 stage stacks (to get their service account emails), apply `control-ledger` with those emails, set the two
 stage variables to the same values, apply the stages, then follow the one-time initialization in
-[model control](model-control.md). Paid model use stays disabled: no tariff is configured and the provider is
-the disabled one. The ledger bounds model cost only; it is not a total invoice cap.
+[model control](model-control.md). With default inputs paid model use stays disabled:
+`vertex = null` emits no model settings, tariff or predict IAM. Optional
+Terraform-owned preparation is defined in `deployment/gcp/vertex.tf`; permission,
+review attestations and model activation are explicit independent gates described
+in [the provider runbook](vertex-provider.md#terraform-owned-preparation). It never
+initializes the store or changes ownership of the shared APIs/database. The ledger
+bounds model cost only; it is not a total invoice cap.
 
 ## Secrets and the data-handling policy
 

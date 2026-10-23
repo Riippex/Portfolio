@@ -41,6 +41,17 @@ const gcpDir = join(root, "deployment/gcp");
 const cloudflareDir = join(root, "deployment/cloudflare");
 const ledgerDir = join(root, "deployment/control-ledger");
 const IMAGE = "us-central1-docker.pkg.dev/synthetic-project/portfolio/backend:synthetic-tag";
+// Override every GCP root input, including ignored operator .tfvars. Plans must
+// never inherit a real identity, activation gate or tariff from this checkout.
+const GCP_INPUTS = [
+  "project_id=synthetic-project", "region=us-central1", "environment=dev", "create_service=false",
+  "service_name=rafael-portfolio-backend", "backend_service_account_id=sa-portfolio-backend",
+  "artifact_repository_id=portfolio", "container_image=", "backend_port=8080",
+  "min_instances=0", "max_instances=2", "cpu_limit=1000m", "memory_limit=512Mi",
+  "allow_unauthenticated=true", "github_repository=Riippex/Portfolio",
+  "workload_identity_pool_id=github-actions-pool", "workload_identity_pool_provider_id=github-provider",
+  "ci_service_account_id=sa-portfolio-ci", "control_ledger_project_id=", "control_ledger_database_id=", "vertex=null",
+];
 
 // Synthetic and unique per run, so a hit can only come from this run's input.
 const syntheticToken = `SYNTH${randomBytes(18).toString("hex")}`.slice(0, 40);
@@ -222,7 +233,7 @@ function gcpPlan(work, label, state, vars, { destroy = false, save = false } = {
   const args = ["plan", "-input=false", "-lock=false", "-refresh=false", "-no-color", `-state=${state}`];
   if (destroy) args.push("-destroy");
   if (save) args.push(`-out=${planPath}`);
-  for (const variable of vars) args.push("-var", variable);
+  for (const variable of [...GCP_INPUTS, ...vars]) args.push("-var", variable);
   const result = terraform(gcpDir, args);
   gcpRunTexts.push(result.text);
   const changes = save && result.status === 0
@@ -447,6 +458,74 @@ function proveStageWiring(work) {
   record(!texts.some(reachedNetwork), "stage wiring scenarios made no provider network attempt", `${texts.length} plans`);
 }
 
+// 4. Provider configuration and predict access are separate opt-in gates.
+function proveVertexPreparation(work) {
+  const empty = join(work, "vertex-empty.tfstate");
+  const inputs = ["create_service=true", `container_image=${IMAGE}`,
+    "control_ledger_project_id=synthetic-project", "control_ledger_database_id=portfolio-control"];
+  const prepared = { location: "global", tariff: { version: "synthetic-reviewed",
+    input_micro_usd_per_million: 250000, output_micro_usd_per_million: 1500000,
+    valid_through_utc: "2030-01-01" } }; // Parsing fixture, not a live valid tariff.
+  const env = (run) => Object.fromEntries((run.changes.find((c) => c.address === "google_cloud_run_v2_service.backend[0]")
+    ?.change.after.template[0].containers[0].env ?? []).map((e) => [e.name, e.value]));
+  const predict = (run) => run.changes.filter((c) => c.address.startsWith("google_project_iam_") && c.name === "vertex_predict");
+  const plan = (label, value, extra = [], save = true) => gcpPlan(work, `vertex ${label}`, empty,
+    [...inputs, `vertex=${JSON.stringify(value)}`, ...extra], { save });
+
+  for (const stage of ["dev", "prod"]) {
+    const run = plan(`default ${stage}`, null, [`environment=${stage}`]);
+    record(run.status === 0 && predict(run).length === 0 && !Object.keys(env(run)).some((key) => key.startsWith("Assistant__Vertex") || key.includes("__Tariff__")),
+      `Vertex default leaves ${stage} without model settings, tariff or predict resources`);
+  }
+  let run = plan("prepared disabled", prepared);
+  const settings = env(run);
+  record(run.status === 0 && predict(run).length === 0 && ["Enabled", "DataPolicyReviewed", "TokenCountingReviewed", "RecoveryReady"]
+    .every((key) => settings[`Assistant__Vertex__${key}`] === "false"), "prepared settings default every activation/review gate off, with no predict resources");
+  record(settings.Assistant__Vertex__ProjectId === "synthetic-project" && settings.Assistant__Vertex__Location === "global" &&
+    settings.Assistant__ModelControl__Tariff__ModelId === "gemini-3.1-flash-lite" &&
+    settings.Assistant__ModelControl__Tariff__InputMicroUsdPerMillionTokens === "250000" &&
+    settings.Assistant__ModelControl__Tariff__OutputMicroUsdPerMillionTokens === "1500000" &&
+    settings.Assistant__ModelControl__Tariff__Version === "synthetic-reviewed" &&
+    settings.Assistant__ModelControl__Tariff__ValidThroughUtc === "2030-01-01" &&
+    !Object.hasOwn(settings, "Assistant__ModelControl__InitializeStore"), "prepared runtime receives the explicit pinned model/tariff, never initialization");
+
+  run = plan("permission only", { ...prepared, grant_predict_access: true });
+  const role = predict(run).find((c) => c.type === "google_project_iam_custom_role")?.change.after;
+  record(run.status === 0 && predict(run).length === 2 && role?.project === "synthetic-project" &&
+    role?.role_id === "portfolioVertexPredict_dev" && JSON.stringify(role?.permissions) === '["aiplatform.endpoints.predict"]' &&
+    env(run).Assistant__Vertex__Enabled === "false", "explicit predict grant creates only a single-permission stage role/binding and keeps the model off");
+  record(!run.changes.some((c) => c.type.startsWith("google_firestore") || c.change.actions.includes("delete")),
+    "provider preparation creates no database, TTL or destructive change");
+
+  const activated = { ...prepared, grant_predict_access: true, enabled: true,
+    data_policy_reviewed: true, token_counting_reviewed: true, recovery_ready: true };
+  run = plan("reviewed synthetic activation", activated);
+  record(run.status === 0 && env(run).Assistant__Vertex__Enabled === "true", "synthetic fully reviewed activation is representable, plan only");
+  for (const flag of ["grant_predict_access", "data_policy_reviewed", "token_counting_reviewed", "recovery_ready"]) {
+    run = plan(`missing ${flag}`, { ...activated, [flag]: false }, [], false);
+    record(run.status !== 0 && /Enabling Vertex requires explicit predict access/.test(run.text.replace(/\s+/g, " ")),
+      `activation without ${flag} is refused`);
+  }
+  for (const overrides of [["control_ledger_project_id=other-project"], ["control_ledger_database_id="], ["control_ledger_project_id=", "control_ledger_database_id="]]) {
+    run = plan(`wrong ledger ${overrides.join()}`, prepared, overrides, false);
+    record(run.status !== 0 && /Vertex requires the shared control ledger/.test(run.text.replace(/\s+/g, " ")),
+      `provider settings refuse missing/mismatched ledger: ${overrides.join()}`);
+  }
+  run = plan("permission without service", { ...prepared, grant_predict_access: true }, ["create_service=false"], false);
+  record(run.status !== 0 && /Vertex predict access requires the existing service/.test(run.text.replace(/\s+/g, " ")),
+    "predict access cannot be granted during foundation bootstrap");
+  for (const [label, bad] of [
+    ["location", { ...prepared, location: "us" }],
+    ["low tariff", { ...prepared, tariff: { ...prepared.tariff, input_micro_usd_per_million: 1 } }],
+    ["fractional tariff", { ...prepared, tariff: { ...prepared.tariff, output_micro_usd_per_million: 1500000.5 } }],
+    ["bad date", { ...prepared, tariff: { ...prepared.tariff, valid_through_utc: "not-a-date" } }],
+  ]) {
+    run = plan(`invalid ${label}`, bad, [], false);
+    record(run.status !== 0 && /vertex requires the approved global/.test(run.text.replace(/\s+/g, " ")), `invalid Vertex ${label} is refused`);
+  }
+  record(!gcpRunTexts.some(reachedNetwork), "provider preparation proofs made no provider network attempt");
+}
+
 // ---------------------------------------------------------------------------------------
 
 function main() {
@@ -463,6 +542,7 @@ function main() {
     proveServiceTransition(work);
     proveControlLedger(work);
     proveStageWiring(work);
+    proveVertexPreparation(work);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
