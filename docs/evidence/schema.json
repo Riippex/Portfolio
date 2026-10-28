@@ -39,6 +39,17 @@
             "items": { "type": "string" },
             "minItems": 1
           },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["platform", "url"],
+              "properties": {
+                "platform": { "type": "string", "enum": ["linkedin", "github"] },
+                "url": { "type": "string" }
+              }
+            }
+          },
           "claims": {
             "type": "array",
             "items": {

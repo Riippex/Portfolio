@@ -1,11 +1,19 @@
 export type EvidenceStatus = "pending" | "verified";
 
+export type ProfileLinkPlatform = "linkedin" | "github";
+
+export interface ProfileLink {
+  readonly platform: ProfileLinkPlatform;
+  readonly url: string;
+}
+
 export interface Profile {
   readonly name: string;
   readonly headline: string;
   readonly summary: string;
   readonly evidenceStatus: EvidenceStatus;
   readonly focusAreas: readonly string[];
+  readonly links?: readonly ProfileLink[];
 }
 
 export interface SelectedProject {

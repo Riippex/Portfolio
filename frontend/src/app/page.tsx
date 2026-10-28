@@ -2,6 +2,7 @@ import { AssistantChat } from "@/modules/assistant/components/assistant-chat";
 import { ContactForm } from "@/modules/contact/components/contact-form";
 import { JobMatcher } from "@/modules/job-matching/components/job-matcher";
 import { getProfile, getSelectedProjects } from "@/modules/portfolio/api";
+import { ProfileLinks } from "@/modules/portfolio/components/profile-links";
 import { BrandMark } from "@/shared/brand/brand-mark";
 import Link from "next/link";
 
@@ -50,6 +51,7 @@ export default async function Home() {
           <a className="button primary" href="#work">Explore selected work <span>↘</span></a>
           <a className="button secondary" href="#assistant">Ask R AI <span>⌁</span></a>
         </div>
+        <ProfileLinks links={profile?.links} />
         <div className="focus-grid" aria-label="Focus areas">
           {profile && profile.focusAreas.length > 0 ? (
             profile.focusAreas.map((area, index) => (

@@ -73,6 +73,15 @@ public sealed partial class PublishedBackendSmokeTests
             Assert.Contains("Expinn", profileSummary);
             Assert.DoesNotContain("Expinn Technology", profileSummary);
             Assert.DoesNotContain("works as", profileSummary);
+            var profileLinks = profileJson.RootElement.GetProperty("links").EnumerateArray()
+                .Select(link => (link.GetProperty("platform").GetString(), link.GetProperty("url").GetString()))
+                .ToArray();
+            Assert.Equal(
+                [
+                    ("linkedin", "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz"),
+                    ("github", "https://github.com/Riippex")
+                ],
+                profileLinks);
 
             using var evidence = await http.GetAsync(new Uri("/v1/evidence", UriKind.Relative));
             Assert.Equal(HttpStatusCode.OK, evidence.StatusCode);
@@ -98,14 +107,14 @@ public sealed partial class PublishedBackendSmokeTests
             using var profileEvidenceJson = JsonDocument.Parse(await profileEvidence.Content.ReadAsStringAsync());
             var profileItem = profileEvidenceJson.RootElement.GetProperty("item");
             Assert.Equal("verified", profileItem.GetProperty("evidenceStatus").GetString());
-            Assert.Equal("2026.10.1", profileItem.GetProperty("version").GetString());
+            Assert.Equal("2026.10.2", profileItem.GetProperty("version").GetString());
             Assert.Equal("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", profileItem.GetProperty("sourceUrl").GetString());
             var profileSectionSlugs = profileEvidenceJson.RootElement.GetProperty("sections").EnumerateArray()
                 .Select(section => section.GetProperty("slug").GetString()!).ToArray();
-            Assert.Equal(["overview", "summary", "studies", "experience", "training", "basis-and-limits"], profileSectionSlugs);
+            Assert.Equal(["overview", "summary", "studies", "experience", "training", "links", "basis-and-limits"], profileSectionSlugs);
             var profileClaimIds = profileItem.GetProperty("claims").EnumerateArray()
                 .Select(claim => claim.GetProperty("claimId").GetString()!).ToArray();
-            Assert.Equal(["claim-profile-04", "claim-profile-05", "claim-profile-06", "claim-profile-07"], profileClaimIds);
+            Assert.Equal(["claim-profile-04", "claim-profile-05", "claim-profile-06", "claim-profile-07", "claim-profile-08", "claim-profile-09"], profileClaimIds);
 
             using var vextisEvidence = await http.GetAsync(new Uri("/v1/evidence/vextis", UriKind.Relative));
             Assert.Equal(HttpStatusCode.OK, vextisEvidence.StatusCode);
@@ -308,7 +317,7 @@ public sealed partial class PublishedBackendSmokeTests
                 {
                     Assert.Equal("evidence-profile", citation.GetProperty("documentId").GetString());
                     Assert.Equal("verified", citation.GetProperty("evidenceStatus").GetString());
-                    Assert.Equal("2026.10.1", citation.GetProperty("version").GetString());
+                    Assert.Equal("2026.10.2", citation.GetProperty("version").GetString());
                     Assert.Equal("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", citation.GetProperty("sourceUrl").GetString());
                 });
                 Assert.Contains(expinnCitations, citation =>

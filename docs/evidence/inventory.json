@@ -1,7 +1,7 @@
 {
   "$schema": "./schema.json",
-  "version": "2026.10.1",
-  "lastUpdated": "2026-10-09",
+  "version": "2026.10.2",
+  "lastUpdated": "2026-10-27",
   "items": [
     {
       "id": "evidence-profile",
@@ -15,11 +15,21 @@
         "AI engineering",
         "Cloud fundamentals"
       ],
-      "version": "2026.10.1",
+      "links": [
+        {
+          "platform": "linkedin",
+          "url": "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz"
+        },
+        {
+          "platform": "github",
+          "url": "https://github.com/Riippex"
+        }
+      ],
+      "version": "2026.10.2",
       "evidenceStatus": "verified",
       "sourceUrl": "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
       "documentPath": "docs/evidence/profile.md",
-      "lastReviewed": "2026-10-09",
+      "lastReviewed": "2026-10-27",
       "claims": [
         {
           "claimId": "claim-profile-04",
@@ -44,6 +54,18 @@
           "statement": "The owner-maintained public profile references OCI and ONE training.",
           "status": "verified",
           "citation": "docs/evidence/profile.md#training"
+        },
+        {
+          "claimId": "claim-profile-08",
+          "statement": "The owner-maintained public LinkedIn profile is https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz.",
+          "status": "verified",
+          "citation": "docs/evidence/profile.md#links"
+        },
+        {
+          "claimId": "claim-profile-09",
+          "statement": "The owner-confirmed public GitHub profile (Riippex) is https://github.com/Riippex.",
+          "status": "verified",
+          "citation": "docs/evidence/profile.md#links"
         }
       ]
     },

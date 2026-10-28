@@ -21,6 +21,16 @@ public sealed class AssistantService : IAssistantService
     private const int CandidateLimit = 20;
     private const int VerifiedChunkLimit = 5;
 
+    private static readonly string[] LinkPlatformNames =
+    [
+        "github",
+        "linkedin",
+        "twitter",
+        "instagram",
+        "youtube",
+        "gitlab"
+    ];
+
     private readonly IAssistantEvidenceAdapter _evidenceAdapter;
     private readonly IAssistantSynthesizer _synthesizer;
     private readonly IAssistantSafetyEvaluator _safetyEvaluator;
@@ -179,8 +189,63 @@ public sealed class AssistantService : IAssistantService
             return [];
         }
 
-        return candidateChunks
+        var verifiedChunks = candidateChunks
             .Where(chunk => chunk.Score > 0 && IsVerified(chunk))
+            .ToList();
+
+        var paddedQuery = $" {NormalizeWords(request.Message)} ";
+        var requestedPlatforms = LinkPlatformNames
+            .Where(platform => ContainsPhrase(paddedQuery, platform))
+            .ToList();
+
+        if (requestedPlatforms.Count > 0)
+        {
+            var linksChunk = verifiedChunks.FirstOrDefault(chunk =>
+                string.Equals(chunk.SectionSlug, "links", StringComparison.OrdinalIgnoreCase));
+
+            if (linksChunk is null)
+            {
+                return [];
+            }
+
+            var lines = linksChunk.Content
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .ToList();
+
+            if (requestedPlatforms.Any(platform =>
+                    !lines.Any(line => ContainsPhrase($" {NormalizeWords(line)} ", platform))))
+            {
+                return [];
+            }
+
+            var matchingLines = lines
+                .Where(line => requestedPlatforms.Any(platform =>
+                    ContainsPhrase($" {NormalizeWords(line)} ", platform)))
+                .ToList();
+
+            var matchingApprovedClaims = (linksChunk.ApprovedClaims ?? [])
+                .Where(claim => requestedPlatforms.Any(platform =>
+                    ContainsPhrase($" {NormalizeWords(claim.Statement)} ", platform)))
+                .ToList();
+
+            var matchingClaimIds = matchingApprovedClaims.Count > 0
+                ? matchingApprovedClaims.Select(claim => claim.ClaimId).ToList()
+                : linksChunk.Claims;
+
+            return
+            [
+                linksChunk with
+                {
+                    Content = string.Join("\n", matchingLines),
+                    Claims = matchingClaimIds,
+                    ApprovedClaims = matchingApprovedClaims.Count > 0 ? matchingApprovedClaims : linksChunk.ApprovedClaims
+                }
+            ];
+        }
+
+        return verifiedChunks
             .Take(VerifiedChunkLimit)
             .ToList();
     }

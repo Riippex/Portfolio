@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Rafael.Portfolio.Modules.Knowledge.Domain;
 using Rafael.Portfolio.Modules.Portfolio.Application;
+using Rafael.Portfolio.Modules.Portfolio.Domain;
 using Rafael.Portfolio.Modules.Portfolio.Infrastructure;
 
 namespace Rafael.Portfolio.UnitTests;
@@ -35,6 +36,20 @@ public sealed class PortfolioCatalogTests
     }
 
     [Fact]
+    public void Profile_exposes_approved_linkedin_and_github_public_links()
+    {
+        var catalog = CreateCatalog();
+        var profile = catalog.GetProfile();
+
+        Assert.Equal(
+            [
+                new ProfileLink("linkedin", "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz"),
+                new ProfileLink("github", "https://github.com/Riippex")
+            ],
+            profile.Links);
+    }
+
+    [Fact]
     public void Catalog_profile_matches_canonical_inventory_without_drift()
     {
         var catalog = CreateCatalog();
@@ -46,6 +61,9 @@ public sealed class PortfolioCatalogTests
         Assert.Equal(profileItem.Summary, profile.Summary);
         Assert.Equal(profileItem.EvidenceStatus, profile.EvidenceStatus);
         Assert.Equal(profileItem.FocusAreas, profile.FocusAreas);
+        Assert.Equal(
+            profileItem.Links.Select(link => (link.Platform, link.Url)),
+            profile.Links.Select(link => (link.Platform, link.Url)));
     }
 
     [Fact]
@@ -123,5 +141,117 @@ public sealed class PortfolioCatalogTests
                 Assert.Equal(pair.First.Citation, pair.Second.Citation);
             });
         });
+    }
+
+    [Fact]
+    public void Catalog_handles_missing_empty_and_removed_profile_links()
+    {
+        var missingLinksPath = WriteTempManifest(linksJson: null);
+        try
+        {
+            var catalog = EvidenceInventoryPortfolioCatalog.FromFile(missingLinksPath);
+            Assert.Empty(catalog.GetProfile().Links);
+        }
+        finally
+        {
+            File.Delete(missingLinksPath);
+        }
+
+        var emptyLinksPath = WriteTempManifest(linksJson: "[]");
+        try
+        {
+            var catalog = EvidenceInventoryPortfolioCatalog.FromFile(emptyLinksPath);
+            Assert.Empty(catalog.GetProfile().Links);
+        }
+        finally
+        {
+            File.Delete(emptyLinksPath);
+        }
+
+        var singleLinkPath = WriteTempManifest(
+            linksJson: """[{"platform":"linkedin","url":"https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz"}]""");
+        try
+        {
+            var catalog = EvidenceInventoryPortfolioCatalog.FromFile(singleLinkPath);
+            var link = Assert.Single(catalog.GetProfile().Links);
+            Assert.Equal("linkedin", link.Platform);
+            Assert.Equal("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", link.Url);
+        }
+        finally
+        {
+            File.Delete(singleLinkPath);
+        }
+    }
+
+    [Theory]
+    [InlineData("""[{"platform":"github","url":"javascript:alert(1)"}]""")]
+    [InlineData("""[{"platform":"github","url":"data:text/html,<script>alert(1)</script>"}]""")]
+    [InlineData("""[{"platform":"github","url":"http://github.com/Riippex"}]""")]
+    [InlineData("""[{"platform":"github","url":"https://github.com@evil.example/Riippex"}]""")]
+    [InlineData("""[{"platform":"github","url":"https://github.com.evil.example/Riippex"}]""")]
+    [InlineData("""[{"platform":"linkedin","url":"https://co.linkedin.com.evil.example/in/rafael"}]""")]
+    [InlineData("""[{"platform":"github","url":"https://github.com/Riippex\"><script>"}]""")]
+    [InlineData("""[{"platform":"linkedin","url":"https://co.linkedin.com/in/rafael%2fadmin"}]""")]
+    [InlineData("""[{"platform":"github","url":"https://github.com/Riippex/Portfolio"}]""")]
+    [InlineData("""[{"platform":"twitter","url":"https://twitter.com/example"}]""")]
+    [InlineData("""[{"platform":"github","url":"https://github.com/Riippex"},{"platform":"github","url":"https://github.com/Other"}]""")]
+    public void Catalog_rejects_malformed_unsupported_duplicate_or_unsafe_profile_links(string linksJson)
+    {
+        var manifestPath = WriteTempManifest(linksJson);
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() =>
+                EvidenceInventoryPortfolioCatalog.FromFile(manifestPath));
+        }
+        finally
+        {
+            File.Delete(manifestPath);
+        }
+    }
+
+    private static string WriteTempManifest(string? linksJson)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"portfolio-catalog-{Guid.NewGuid():N}.json");
+        var linksProperty = linksJson is null ? string.Empty : $"\"links\": {linksJson},";
+        File.WriteAllText(
+            path,
+            $$"""
+            {
+              "version": "2026.10.2",
+              "lastUpdated": "2026-10-27",
+              "items": [
+                {
+                  "id": "evidence-profile",
+                  "slug": "profile",
+                  "kind": "profile",
+                  "title": "Rafael Patiño",
+                  "summary": "Summary",
+                  "headline": "Software & AI Engineer",
+                  "focusAreas": ["Software engineering"],
+                  {{linksProperty}}
+                  "version": "2026.10.2",
+                  "evidenceStatus": "verified",
+                  "sourceUrl": "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
+                  "documentPath": "docs/evidence/profile.md",
+                  "lastReviewed": "2026-10-27",
+                  "claims": []
+                },
+                {
+                  "id": "evidence-project-vextis",
+                  "slug": "vextis",
+                  "kind": "project",
+                  "title": "Vextis",
+                  "summary": "Summary",
+                  "version": "2026.09",
+                  "evidenceStatus": "pending",
+                  "sourceUrl": null,
+                  "documentPath": "docs/evidence/projects/vextis.md",
+                  "lastReviewed": "2026-09-28",
+                  "claims": []
+                }
+              ]
+            }
+            """);
+        return path;
     }
 }

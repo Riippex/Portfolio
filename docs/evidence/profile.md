@@ -3,8 +3,8 @@
 - Identifier: `evidence-profile`
 - Kind: Profile
 - Status: `verified`
-- Version: `2026.10.1`
-- Last reviewed: 2026-10-09
+- Version: `2026.10.2`
+- Last reviewed: 2026-10-27
 - Canonical Source: https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz
 
 ## Summary
@@ -23,6 +23,11 @@ Rafael Patiño's owner-maintained public professional profile lists software eng
 ## Training
 
 - **OCI and ONE:** The public profile references OCI (Oracle Cloud Infrastructure) and ONE (Oracle Next Education) training.
+
+## Links
+
+- **LinkedIn:** The owner-maintained public LinkedIn profile is https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz.
+- **GitHub:** The owner-confirmed public GitHub profile (`Riippex`) is https://github.com/Riippex.
 
 ## Basis and limits
 

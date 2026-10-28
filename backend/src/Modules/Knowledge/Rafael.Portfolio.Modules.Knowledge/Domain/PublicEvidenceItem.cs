@@ -13,4 +13,8 @@ public sealed record PublicEvidenceItem(
     DateOnly LastReviewed,
     IReadOnlyList<EvidenceClaim> Claims,
     string? Headline = null,
-    IReadOnlyList<string>? FocusAreas = null);
+    IReadOnlyList<string>? FocusAreas = null,
+    IReadOnlyList<EvidenceProfileLink>? Links = null)
+{
+    public IReadOnlyList<EvidenceProfileLink> Links { get; init; } = Links ?? [];
+}

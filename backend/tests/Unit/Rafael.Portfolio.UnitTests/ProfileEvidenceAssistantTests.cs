@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Rafael.Portfolio.Modules.Assistant.Application;
+using Rafael.Portfolio.Modules.Assistant.Application.Orchestration;
 using Rafael.Portfolio.Modules.Assistant.Domain;
+using Rafael.Portfolio.Modules.Assistant.Infrastructure;
 
 namespace Rafael.Portfolio.UnitTests;
 
@@ -15,7 +17,8 @@ namespace Rafael.Portfolio.UnitTests;
 public sealed class ProfileEvidenceAssistantTests
 {
     private const string ProfileSource = "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz";
-    private const string ProfileVersion = "2026.10.1";
+    private const string GitHubProfileUrl = "https://github.com/Riippex";
+    private const string ProfileVersion = "2026.10.2";
 
     // Claim ids that once labelled different, now removed assertions must never come back.
     private static readonly string[] RetiredClaimIds = ["claim-profile-01", "claim-profile-02", "claim-profile-03"];
@@ -63,6 +66,8 @@ public sealed class ProfileEvidenceAssistantTests
     [InlineData("Tell me about the AI Engineer role at Expinn", "Experience", "claim-profile-05", "announces an AI Engineer role at Expinn")]
     [InlineData("What is StaffHub in Rafael's profile?", "Experience", "claim-profile-06", "lists StaffHub in its experience section")]
     [InlineData("What are the OCI and ONE training references?", "Training", "claim-profile-07", "OCI (Oracle Cloud Infrastructure) and ONE (Oracle Next Education)")]
+    [InlineData("What is Rafael's LinkedIn?", "Links", "claim-profile-08", ProfileSource)]
+    [InlineData("Where can I find Rafael's GitHub?", "Links", "claim-profile-09", GitHubProfileUrl)]
     public async Task Supported_profile_questions_are_answered_from_the_external_source_with_fresh_claim_ids(
         string message, string section, string claimId, string expectedText)
     {
@@ -99,7 +104,7 @@ public sealed class ProfileEvidenceAssistantTests
 
         Assert.Equal(AssistantGroundingStatus.Grounded, response.GroundingStatus);
         var claims = response.Citations.SelectMany(c => c.Claims).Distinct().Order().ToList();
-        Assert.All(claims, claim => Assert.Contains(claim, new[] { "claim-profile-04", "claim-profile-05", "claim-profile-06", "claim-profile-07" }));
+        Assert.All(claims, claim => Assert.Contains(claim, new[] { "claim-profile-04", "claim-profile-05", "claim-profile-06", "claim-profile-07", "claim-profile-08", "claim-profile-09" }));
         Assert.DoesNotContain(response.Citations, c => c.SectionHeading is "Focus areas" or "Professional context" or "Engineering principles");
         AssertNoRemovedPhrases(response.Answer);
     }
@@ -272,7 +277,7 @@ public sealed class ProfileEvidenceAssistantTests
         var body = await chat.Content.ReadAsStringAsync();
         Assert.Contains("\"groundingStatus\":\"grounded\"", body);
         Assert.Contains("claim-profile-05", body);
-        Assert.Contains("2026.10.1", body);
+        Assert.Contains("2026.10.2", body);
         Assert.DoesNotContain("claim-profile-02", body);
         Assert.DoesNotContain("Expinn Technology", body);
 
@@ -290,5 +295,136 @@ public sealed class ProfileEvidenceAssistantTests
         Assert.Contains("\"groundingStatus\":\"not_documented\"", sse);
         Assert.DoesNotContain("event: citation", sse);
         Assert.Contains("event: done", sse);
+    }
+
+    [Fact]
+    public async Task Deterministic_assistant_answers_github_and_linkedin_questions_without_model_consent_or_live_provider()
+    {
+        await using var host = CreateHost();
+        Assert.IsType<DisabledModelProvider>(host.Services.GetRequiredService<IModelProvider>());
+        Assert.IsType<UnverifiedModelRequestTokenCounter>(host.Services.GetRequiredService<IModelRequestTokenCounter>());
+
+        var service = host.Services.GetRequiredService<IAssistantService>();
+
+        var githubResponse = await service.ChatAsync(new AssistantChatRequest("Where can I find Rafael's GitHub?"));
+        Assert.Equal(AssistantGroundingStatus.Grounded, githubResponse.GroundingStatus);
+        Assert.Contains(GitHubProfileUrl, githubResponse.Answer);
+        Assert.DoesNotContain(ProfileSource, githubResponse.Answer);
+        var githubCitation = Assert.Single(githubResponse.Citations);
+        AssertProfileCitation(githubCitation);
+        Assert.Equal("Links", githubCitation.SectionHeading);
+        Assert.Equal(["claim-profile-09"], githubCitation.Claims);
+
+        var linkedinResponse = await service.ChatAsync(new AssistantChatRequest("What is Rafael's LinkedIn?"));
+        Assert.Equal(AssistantGroundingStatus.Grounded, linkedinResponse.GroundingStatus);
+        Assert.Contains(ProfileSource, linkedinResponse.Answer);
+        Assert.DoesNotContain(GitHubProfileUrl, linkedinResponse.Answer);
+        var linkedinCitation = Assert.Single(linkedinResponse.Citations);
+        AssertProfileCitation(linkedinCitation);
+        Assert.Equal("Links", linkedinCitation.SectionHeading);
+        Assert.Equal(["claim-profile-08"], linkedinCitation.Claims);
+
+        using var client = host.CreateClient();
+        using var githubHttp = await client.PostAsJsonAsync(
+            "/v1/assistant/chat",
+            new { message = "Where can I find Rafael's GitHub?" });
+        Assert.Equal(HttpStatusCode.OK, githubHttp.StatusCode);
+        var githubBody = await githubHttp.Content.ReadAsStringAsync();
+        Assert.Contains("\"groundingStatus\":\"grounded\"", githubBody);
+        Assert.Contains(GitHubProfileUrl, githubBody);
+        Assert.Contains("claim-profile-09", githubBody);
+
+        using var linkedinHttp = await client.PostAsJsonAsync(
+            "/v1/assistant/chat",
+            new { message = "What is Rafael's LinkedIn?" });
+        Assert.Equal(HttpStatusCode.OK, linkedinHttp.StatusCode);
+        var linkedinBody = await linkedinHttp.Content.ReadAsStringAsync();
+        Assert.Contains("\"groundingStatus\":\"grounded\"", linkedinBody);
+        Assert.Contains(ProfileSource, linkedinBody);
+        Assert.Contains("claim-profile-08", linkedinBody);
+    }
+
+    [Fact]
+    public async Task Removing_a_link_from_canonical_evidence_removes_it_from_api_and_assistant_results()
+    {
+        var tempEvidenceDir = Path.Combine(Path.GetTempPath(), $"profile-links-removal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(tempEvidenceDir, "projects"));
+
+        try
+        {
+            var repoEvidenceDir = Path.Combine(TestRepositoryRoot.Find(), "docs", "evidence");
+            foreach (var file in Directory.GetFiles(repoEvidenceDir))
+            {
+                File.Copy(file, Path.Combine(tempEvidenceDir, Path.GetFileName(file)));
+            }
+
+            foreach (var file in Directory.GetFiles(Path.Combine(repoEvidenceDir, "projects")))
+            {
+                File.Copy(file, Path.Combine(tempEvidenceDir, "projects", Path.GetFileName(file)));
+            }
+
+            var manifestPath = Path.Combine(tempEvidenceDir, "inventory.json");
+            var manifestNode = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(manifestPath))!;
+            var profileNode = manifestNode["items"]!.AsArray()
+                .Single(item => item?["slug"]?.GetValue<string>() == "profile")!;
+            var linksArray = profileNode["links"]!.AsArray();
+            for (var i = linksArray.Count - 1; i >= 0; i--)
+            {
+                if (linksArray[i]?["platform"]?.GetValue<string>() == "github")
+                {
+                    linksArray.RemoveAt(i);
+                }
+            }
+
+            File.WriteAllText(manifestPath, manifestNode.ToJsonString());
+
+            await using var host = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Development");
+                builder.UseSetting("Portfolio:Stage", "local");
+                builder.UseSetting("EvidenceInventory:ManifestPath", manifestPath);
+            });
+
+            using var client = host.CreateClient();
+
+            var profileJson = await client.GetStringAsync("/v1/profile");
+            Assert.Contains(ProfileSource, profileJson);
+            Assert.DoesNotContain(GitHubProfileUrl, profileJson);
+
+            var evidenceJson = await client.GetStringAsync("/v1/evidence/profile");
+            Assert.Contains("claim-profile-08", evidenceJson);
+            Assert.DoesNotContain("claim-profile-09", evidenceJson);
+            Assert.DoesNotContain(GitHubProfileUrl, evidenceJson);
+
+            using var githubChat = await client.PostAsJsonAsync(
+                "/v1/assistant/chat",
+                new { message = "Where can I find Rafael's GitHub?" });
+            Assert.Equal(HttpStatusCode.OK, githubChat.StatusCode);
+            var githubChatBody = await githubChat.Content.ReadAsStringAsync();
+            Assert.Contains("\"groundingStatus\":\"not_documented\"", githubChatBody);
+            Assert.Contains("\"citations\":[]", githubChatBody);
+            Assert.DoesNotContain(GitHubProfileUrl, githubChatBody);
+
+            using var githubStream = await client.PostAsJsonAsync(
+                "/v1/assistant/chat/stream",
+                new { message = "Where can I find Rafael's GitHub?" });
+            Assert.Equal(HttpStatusCode.OK, githubStream.StatusCode);
+            var githubSse = await githubStream.Content.ReadAsStringAsync();
+            Assert.Contains("\"groundingStatus\":\"not_documented\"", githubSse);
+            Assert.DoesNotContain("event: citation", githubSse);
+
+            using var linkedinChat = await client.PostAsJsonAsync(
+                "/v1/assistant/chat",
+                new { message = "What is Rafael's LinkedIn?" });
+            Assert.Equal(HttpStatusCode.OK, linkedinChat.StatusCode);
+            var linkedinChatBody = await linkedinChat.Content.ReadAsStringAsync();
+            Assert.Contains("\"groundingStatus\":\"grounded\"", linkedinChatBody);
+            Assert.Contains("claim-profile-08", linkedinChatBody);
+            Assert.Contains(ProfileSource, linkedinChatBody);
+        }
+        finally
+        {
+            Directory.Delete(tempEvidenceDir, recursive: true);
+        }
     }
 }

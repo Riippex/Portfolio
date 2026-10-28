@@ -56,6 +56,14 @@ public sealed class EvidenceIngestionTests
         Assert.Equal(["claim-profile-05", "claim-profile-06"], experienceSection.Claims.Select(c => c.ClaimId));
         var trainingSection = Assert.Single(profile.Sections, s => s.Slug == "training");
         Assert.Equal(["claim-profile-07"], trainingSection.Claims.Select(c => c.ClaimId));
+        var linksSection = Assert.Single(profile.Sections, s => s.Slug == "links");
+        Assert.Equal(["claim-profile-08", "claim-profile-09"], linksSection.Claims.Select(c => c.ClaimId));
+        Assert.Equal(
+            [
+                new EvidenceProfileLink("linkedin", "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz"),
+                new EvidenceProfileLink("github", "https://github.com/Riippex")
+            ],
+            profile.Item.Links);
 
         // The removed elaborations are not in any verified section, and their claim ids are retired.
         Assert.DoesNotContain(profile.Sections, s => s.Slug is "focus-areas" or "professional-context" or "engineering-principles");
@@ -68,8 +76,8 @@ public sealed class EvidenceIngestionTests
         }
 
         // Version and review metadata move together between the document and the manifest.
-        Assert.Equal("2026.10.1", profile.Item.Version);
-        Assert.Equal(new DateOnly(2026, 10, 9), profile.Item.LastReviewed);
+        Assert.Equal("2026.10.2", profile.Item.Version);
+        Assert.Equal(new DateOnly(2026, 10, 27), profile.Item.LastReviewed);
     }
 
     [Fact]
@@ -326,6 +334,94 @@ public sealed class EvidenceIngestionTests
                 InventoryWithClaim("docs/evidence/other.md#section"), TestDocuments()));
 
         Assert.Contains("must target the item's own canonical document", ex.Message);
+    }
+
+    [Fact]
+    public void Ingestion_scopes_or_removes_links_section_when_profile_links_are_removed()
+    {
+        var profileMarkdown = File.ReadAllText(
+            Path.Combine(TestRepositoryRoot.Find(), "docs", "evidence", "profile.md"));
+        var documents = new Dictionary<string, string>
+        {
+            ["docs/evidence/profile.md"] = profileMarkdown
+        };
+
+        var onlyLinkedInInventory = new PublicEvidenceInventory(
+            "2026.10.2",
+            new DateOnly(2026, 10, 27),
+            [
+                new PublicEvidenceItem(
+                    "evidence-profile",
+                    "profile",
+                    "profile",
+                    "Rafael Patiño",
+                    "Summary",
+                    "2026.10.2",
+                    EvidenceStatus.Verified,
+                    "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
+                    "docs/evidence/profile.md",
+                    new DateOnly(2026, 10, 27),
+                    [
+                        new EvidenceClaim(
+                            "claim-profile-08",
+                            "The owner-maintained public LinkedIn profile is https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#links"),
+                        new EvidenceClaim(
+                            "claim-profile-09",
+                            "The owner-confirmed public GitHub profile (Riippex) is https://github.com/Riippex.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#links")
+                    ],
+                    Headline: "Software & AI Engineer",
+                    FocusAreas: ["Software engineering"],
+                    Links: [new EvidenceProfileLink("linkedin", "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz")])
+            ]);
+
+        var source = new FileSystemEvidenceSource(onlyLinkedInInventory, documents);
+        var profile = Assert.Single(source.GetAllEvidence());
+        var linksSection = Assert.Single(profile.Sections, s => s.Slug == "links");
+
+        Assert.Contains("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", linksSection.Content);
+        Assert.DoesNotContain("https://github.com/Riippex", linksSection.Content);
+        Assert.Equal(["claim-profile-08"], linksSection.Claims.Select(c => c.ClaimId));
+        Assert.Equal(["claim-profile-08"], profile.Item.Claims.Select(c => c.ClaimId));
+    }
+
+    [Theory]
+    [InlineData("github", "javascript:alert(1)")]
+    [InlineData("github", "data:text/html,<script>alert(1)</script>")]
+    [InlineData("github", "http://github.com/Riippex")]
+    [InlineData("github", "https://github.com@evil.example/Riippex")]
+    [InlineData("github", "https://github.com.evil.example/Riippex")]
+    [InlineData("linkedin", "https://co.linkedin.com.evil.example/in/rafael")]
+    [InlineData("github", "https://github.com/Riippex\"><script>")]
+    [InlineData("twitter", "https://twitter.com/example")]
+    public void Ingestion_fails_fast_on_unsafe_or_unsupported_profile_link(string platform, string url)
+    {
+        var inventory = new PublicEvidenceInventory(
+            "2026.10.2",
+            new DateOnly(2026, 10, 27),
+            [
+                new PublicEvidenceItem(
+                    "evidence-profile",
+                    "profile",
+                    "profile",
+                    "Rafael Patiño",
+                    "Summary",
+                    "2026.10.2",
+                    EvidenceStatus.Verified,
+                    "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
+                    "docs/evidence/test.md",
+                    new DateOnly(2026, 10, 27),
+                    [],
+                    Headline: "Software & AI Engineer",
+                    FocusAreas: ["Software engineering"],
+                    Links: [new EvidenceProfileLink(platform, url)])
+            ]);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new FileSystemEvidenceSource(inventory, TestDocuments()));
     }
 
     private static string CreateTempDirectory()

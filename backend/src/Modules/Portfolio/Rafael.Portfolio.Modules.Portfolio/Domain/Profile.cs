@@ -5,4 +5,8 @@ public sealed record Profile(
     string Headline,
     string Summary,
     string EvidenceStatus,
-    IReadOnlyList<string> FocusAreas);
+    IReadOnlyList<string> FocusAreas,
+    IReadOnlyList<ProfileLink>? Links = null)
+{
+    public IReadOnlyList<ProfileLink> Links { get; init; } = Links ?? [];
+}

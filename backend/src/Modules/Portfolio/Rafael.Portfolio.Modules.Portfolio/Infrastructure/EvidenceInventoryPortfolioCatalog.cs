@@ -32,16 +32,25 @@ public sealed class EvidenceInventoryPortfolioCatalog : IPortfolioCatalog
                 "Canonical evidence inventory profile item must define a headline and at least one focus area.");
         }
 
+        var normalizedLinks = ProfileLink.ValidateAndNormalize(profileItem.Links, profileItem.Id);
+
         _profile = new Profile(
             profileItem.Title,
             profileItem.Headline,
             profileItem.Summary,
             profileItem.EvidenceStatus,
-            profileItem.FocusAreas);
+            profileItem.FocusAreas,
+            normalizedLinks);
 
         var projectItems = manifest.Items
             .Where(item => string.Equals(item.Kind, ProjectKind, StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+        if (projectItems.Any(item => item.Links is { Count: > 0 }))
+        {
+            throw new InvalidOperationException(
+                "Project evidence items cannot declare profile links.");
+        }
 
         if (projectItems.Count == 0)
         {
@@ -111,7 +120,8 @@ public sealed class EvidenceInventoryPortfolioCatalog : IPortfolioCatalog
         DateOnly LastReviewed,
         IReadOnlyList<ManifestClaim> Claims,
         string? Headline = null,
-        IReadOnlyList<string>? FocusAreas = null);
+        IReadOnlyList<string>? FocusAreas = null,
+        IReadOnlyList<ProfileLink>? Links = null);
 
     private sealed record ManifestClaim(
         string ClaimId,
