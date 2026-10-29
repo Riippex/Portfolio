@@ -53,6 +53,7 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
             var sections = MarkdownEvidenceParser.ParseSections(markdown, normalizedItem.Claims);
 
             ValidateClaims(normalizedItem, sections);
+            ValidateProvenance(normalizedItem, markdown);
 
             if (string.Equals(normalizedItem.Kind, "profile", StringComparison.OrdinalIgnoreCase))
             {
@@ -234,6 +235,98 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
         }
     }
 
+    private static void ValidateProvenance(PublicEvidenceItem item, string markdown)
+    {
+        var isVerifiedItem = string.Equals(item.EvidenceStatus, EvidenceStatus.Verified, StringComparison.OrdinalIgnoreCase);
+        var hasVerifiedClaims = item.Claims.Any(c =>
+            string.Equals(c.Status, EvidenceStatus.Verified, StringComparison.OrdinalIgnoreCase));
+
+        if (!isVerifiedItem && hasVerifiedClaims)
+        {
+            throw new InvalidOperationException(
+                $"Evidence item '{item.Id}' with status '{item.EvidenceStatus}' cannot retain verified claims without verified provenance.");
+        }
+
+        if (item.SourceUrl is not null && !IsValidApprovedSourceUrl(item.SourceUrl))
+        {
+            throw new InvalidOperationException(
+                $"Evidence item '{item.Id}' has invalid or unapproved sourceUrl '{item.SourceUrl}'.");
+        }
+
+        if (isVerifiedItem && string.IsNullOrWhiteSpace(item.SourceUrl))
+        {
+            throw new InvalidOperationException(
+                $"Verified evidence item '{item.Id}' must declare an approved HTTPS sourceUrl.");
+        }
+
+        var canonicalSourceValues = ExtractPreambleMetadataValues(markdown, "- Canonical Source:");
+        if (canonicalSourceValues.Count > 1)
+        {
+            throw new InvalidOperationException(
+                $"Evidence document '{item.DocumentPath}' for item '{item.Id}' declares multiple 'Canonical Source' lines.");
+        }
+
+        var declaredCanonicalSource = canonicalSourceValues.Count == 1 ? canonicalSourceValues[0] : null;
+        var hasRecordHeader = ExtractPreambleMetadataValues(markdown, "- Identifier:").Count > 0;
+
+        if (isVerifiedItem)
+        {
+            if (hasRecordHeader && string.IsNullOrWhiteSpace(declaredCanonicalSource))
+            {
+                throw new InvalidOperationException(
+                    $"Verified evidence document '{item.DocumentPath}' for item '{item.Id}' must declare a '- Canonical Source:' matching sourceUrl.");
+            }
+
+            if (declaredCanonicalSource is not null &&
+                !string.Equals(declaredCanonicalSource, item.SourceUrl, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Verified evidence item '{item.Id}' sourceUrl '{item.SourceUrl}' does not match '{item.DocumentPath}' Canonical Source '{declaredCanonicalSource}'.");
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(declaredCanonicalSource) &&
+                 !string.Equals(declaredCanonicalSource, item.SourceUrl, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Pending evidence item '{item.Id}' sourceUrl '{item.SourceUrl ?? "<null>"}' does not match '{item.DocumentPath}' Canonical Source '{declaredCanonicalSource}'.");
+        }
+    }
+
+    private static bool IsValidApprovedSourceUrl(string sourceUrl)
+    {
+        if (string.IsNullOrWhiteSpace(sourceUrl) ||
+            sourceUrl.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)) ||
+            sourceUrl.Contains("github.com/Riippex/Portfolio", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return Uri.TryCreate(sourceUrl, UriKind.Absolute, out var uri)
+            && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrEmpty(uri.UserInfo)
+            && !string.IsNullOrWhiteSpace(uri.Host);
+    }
+
+    private static List<string> ExtractPreambleMetadataValues(string markdown, string prefix)
+    {
+        var values = new List<string>();
+        foreach (var rawLine in markdown.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r').Trim();
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                values.Add(line[prefix.Length..].Trim());
+            }
+        }
+
+        return values;
+    }
+
     private static (PublicEvidenceItem Item, IReadOnlyList<EvidenceSection> Sections, string Markdown) ReconcileProfileLinks(
         PublicEvidenceItem item,
         IReadOnlyList<EvidenceSection> sections,
@@ -278,24 +371,17 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
             .Where(claim => item.Links.Any(link => EvidenceProfileLink.MatchesVerifiedClaim(link, claim)))
             .ToList();
 
-        var removedLinkClaims = linksSection.Claims
-            .Where(c => !retainedLinkClaims.Any(r => string.Equals(r.ClaimId, c.ClaimId, StringComparison.OrdinalIgnoreCase)))
-            .ToList();
-
-        var removedLinkClaimIds = removedLinkClaims
+        var removedLinkClaimIds = linksSection.Claims
             .Select(c => c.ClaimId)
+            .Except(retainedLinkClaims.Select(c => c.ClaimId), StringComparer.OrdinalIgnoreCase)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var sourceUrlWasWithdrawn = !string.IsNullOrWhiteSpace(item.SourceUrl)
-            && !item.Links.Any(link => string.Equals(link.Url, item.SourceUrl, StringComparison.Ordinal))
-            && (EvidenceProfileLink.ContainsExactUrl(linksSection.Content, item.SourceUrl)
-                || removedLinkClaims.Any(c => EvidenceProfileLink.ContainsExactUrl(c.Statement, item.SourceUrl)));
-
-        var updatedItem = removedLinkClaimIds.Count == 0 && !sourceUrlWasWithdrawn
+        // Display links (item.Links / #links claims) and canonical provenance (item.SourceUrl)
+        // are independent concerns: withdrawing a display link never rewrites item.SourceUrl.
+        var updatedItem = removedLinkClaimIds.Count == 0
             ? item
             : item with
             {
-                SourceUrl = sourceUrlWasWithdrawn ? item.Links.FirstOrDefault()?.Url : item.SourceUrl,
                 Claims = item.Claims
                     .Where(c => !removedLinkClaimIds.Contains(c.ClaimId))
                     .ToList()

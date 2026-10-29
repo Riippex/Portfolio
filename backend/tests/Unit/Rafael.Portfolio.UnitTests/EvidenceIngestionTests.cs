@@ -447,11 +447,242 @@ public sealed class EvidenceIngestionTests
         var profile = Assert.Single(source.GetAllEvidence());
         var linksSection = Assert.Single(profile.Sections, s => s.Slug == "links");
 
+        Assert.Equal("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", profile.Item.SourceUrl);
         Assert.Contains(retainedUrl, linksSection.Content);
         Assert.DoesNotContain(removedUrl, linksSection.Content);
         Assert.DoesNotContain(removedUrl, profile.RawMarkdown);
         Assert.Equal([retainedClaimId], linksSection.Claims.Select(c => c.ClaimId));
         Assert.Equal([retainedClaimId], profile.Item.Claims.Select(c => c.ClaimId));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Ingestion_preserves_canonical_provenance_for_studies_and_experience_when_linkedin_display_link_or_all_links_are_removed(
+        bool retainGitHubDisplayLink)
+    {
+        var profileMarkdown = File.ReadAllText(
+            Path.Combine(TestRepositoryRoot.Find(), "docs", "evidence", "profile.md"));
+        var documents = new Dictionary<string, string>
+        {
+            ["docs/evidence/profile.md"] = profileMarkdown
+        };
+
+        IReadOnlyList<EvidenceProfileLink> retainedLinks = retainGitHubDisplayLink
+            ? [new EvidenceProfileLink("github", "https://github.com/Riippex")]
+            : [];
+
+        var inventory = new PublicEvidenceInventory(
+            "2026.10.2",
+            new DateOnly(2026, 10, 27),
+            [
+                new PublicEvidenceItem(
+                    "evidence-profile",
+                    "profile",
+                    "profile",
+                    "Rafael Patiño",
+                    "Public professional profile.",
+                    "2026.10.2",
+                    EvidenceStatus.Verified,
+                    "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
+                    "docs/evidence/profile.md",
+                    new DateOnly(2026, 10, 27),
+                    [
+                        new EvidenceClaim(
+                            "claim-profile-04",
+                            "The owner-maintained public profile lists Software Engineering studies in progress at Universidad Manuela Beltran.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#studies"),
+                        new EvidenceClaim(
+                            "claim-profile-05",
+                            "The owner-maintained public profile announces an AI Engineer role at Expinn.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#experience"),
+                        new EvidenceClaim(
+                            "claim-profile-06",
+                            "The owner-maintained public profile lists StaffHub in its experience section.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#experience"),
+                        new EvidenceClaim(
+                            "claim-profile-07",
+                            "The owner-maintained public profile references OCI and ONE training.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#training"),
+                        new EvidenceClaim(
+                            "claim-profile-08",
+                            "The public LinkedIn profile is https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#links"),
+                        new EvidenceClaim(
+                            "claim-profile-09",
+                            "The public GitHub profile is https://github.com/Riippex.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#links")
+                    ],
+                    Headline: "Software & AI Engineer",
+                    FocusAreas: ["Software engineering"],
+                    Links: retainedLinks)
+            ]);
+
+        var source = new FileSystemEvidenceSource(inventory, documents);
+        var profile = Assert.Single(source.GetAllEvidence());
+
+        // Document provenance remains LinkedIn (never rewritten to GitHub or null).
+        Assert.Equal("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", profile.Item.SourceUrl);
+        Assert.Contains("- Canonical Source: https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", profile.RawMarkdown);
+
+        // Unchanged substantive sections and claims remain verified and intact.
+        var studiesSection = Assert.Single(profile.Sections, s => s.Slug == "studies");
+        Assert.Equal(["claim-profile-04"], studiesSection.Claims.Select(c => c.ClaimId));
+        var experienceSection = Assert.Single(profile.Sections, s => s.Slug == "experience");
+        Assert.Equal(["claim-profile-05", "claim-profile-06"], experienceSection.Claims.Select(c => c.ClaimId));
+        var trainingSection = Assert.Single(profile.Sections, s => s.Slug == "training");
+        Assert.Equal(["claim-profile-07"], trainingSection.Claims.Select(c => c.ClaimId));
+
+        Assert.DoesNotContain(profile.Item.Claims, c => c.ClaimId == "claim-profile-08");
+
+        if (retainGitHubDisplayLink)
+        {
+            var linksSection = Assert.Single(profile.Sections, s => s.Slug == "links");
+            Assert.Contains("https://github.com/Riippex", linksSection.Content);
+            Assert.DoesNotContain("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", linksSection.Content);
+            Assert.Equal(["claim-profile-09"], linksSection.Claims.Select(c => c.ClaimId));
+            Assert.Equal(
+                ["claim-profile-04", "claim-profile-05", "claim-profile-06", "claim-profile-07", "claim-profile-09"],
+                profile.Item.Claims.Select(c => c.ClaimId));
+        }
+        else
+        {
+            Assert.DoesNotContain(profile.Sections, s => s.Slug == "links");
+            Assert.DoesNotContain("## Links", profile.RawMarkdown);
+            Assert.Equal(
+                ["claim-profile-04", "claim-profile-05", "claim-profile-06", "claim-profile-07"],
+                profile.Item.Claims.Select(c => c.ClaimId));
+        }
+    }
+
+    [Theory]
+    [InlineData(EvidenceStatus.Verified, null, "- Canonical Source: https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", EvidenceStatus.Verified)]
+    [InlineData(EvidenceStatus.Verified, "   ", "- Canonical Source: https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", EvidenceStatus.Verified)]
+    [InlineData(EvidenceStatus.Verified, "http://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", "- Canonical Source: http://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", EvidenceStatus.Verified)]
+    [InlineData(EvidenceStatus.Verified, "https://github.com/Riippex/Portfolio", "- Canonical Source: https://github.com/Riippex/Portfolio", EvidenceStatus.Verified)]
+    [InlineData(EvidenceStatus.Verified, "https://github.com/Riippex", "- Canonical Source: https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", EvidenceStatus.Verified)]
+    [InlineData(EvidenceStatus.Verified, "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", "- Canonical Source: Pending", EvidenceStatus.Verified)]
+    [InlineData(EvidenceStatus.Verified, "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", "- Public Source: Pending owner publication", EvidenceStatus.Verified)]
+    [InlineData(EvidenceStatus.Pending, null, "- Public Source: Pending owner publication", EvidenceStatus.Verified)]
+    public void Ingestion_fails_closed_when_underlying_provenance_is_withdrawn_invalid_or_mismatched(
+        string itemStatus,
+        string? sourceUrl,
+        string markdownSourceLine,
+        string claimStatus)
+    {
+        var markdown = $"""
+            # Evidence Record: Rafael Patiño
+
+            - Identifier: `evidence-profile`
+            - Kind: Profile
+            - Status: `{itemStatus}`
+            - Version: `2026.10.2`
+            {markdownSourceLine}
+
+            ## Studies
+
+            - **Universidad Manuela Beltran:** Software Engineering studies in progress.
+
+            ## Links
+
+            - **GitHub:** The public GitHub profile is https://github.com/Riippex.
+            """;
+
+        var documents = new Dictionary<string, string>
+        {
+            ["docs/evidence/profile.md"] = markdown
+        };
+
+        var inventory = new PublicEvidenceInventory(
+            "2026.10.2",
+            new DateOnly(2026, 10, 27),
+            [
+                new PublicEvidenceItem(
+                    "evidence-profile",
+                    "profile",
+                    "profile",
+                    "Rafael Patiño",
+                    "Summary",
+                    "2026.10.2",
+                    itemStatus,
+                    sourceUrl,
+                    "docs/evidence/profile.md",
+                    new DateOnly(2026, 10, 27),
+                    [
+                        new EvidenceClaim(
+                            "claim-profile-04",
+                            "Studies in progress at Universidad Manuela Beltran.",
+                            claimStatus,
+                            "docs/evidence/profile.md#studies")
+                    ],
+                    Headline: "Software & AI Engineer",
+                    FocusAreas: ["Software engineering"],
+                    Links: [])
+            ]);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new FileSystemEvidenceSource(inventory, documents));
+    }
+
+    [Fact]
+    public void Ingestion_accepts_explicit_approved_replacement_provenance_when_manifest_and_markdown_agree()
+    {
+        const string approvedReplacement = "https://example.com/approved-public-profile";
+        var markdown = $"""
+            # Evidence Record: Rafael Patiño
+
+            - Identifier: `evidence-profile`
+            - Kind: Profile
+            - Status: `verified`
+            - Version: `2026.10.2`
+            - Canonical Source: {approvedReplacement}
+
+            ## Studies
+
+            - **Universidad Manuela Beltran:** Software Engineering studies in progress.
+            """;
+
+        var documents = new Dictionary<string, string>
+        {
+            ["docs/evidence/profile.md"] = markdown
+        };
+
+        var inventory = new PublicEvidenceInventory(
+            "2026.10.2",
+            new DateOnly(2026, 10, 27),
+            [
+                new PublicEvidenceItem(
+                    "evidence-profile",
+                    "profile",
+                    "profile",
+                    "Rafael Patiño",
+                    "Summary",
+                    "2026.10.2",
+                    EvidenceStatus.Verified,
+                    approvedReplacement,
+                    "docs/evidence/profile.md",
+                    new DateOnly(2026, 10, 27),
+                    [
+                        new EvidenceClaim(
+                            "claim-profile-04",
+                            "Studies in progress at Universidad Manuela Beltran.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#studies")
+                    ],
+                    Headline: "Software & AI Engineer",
+                    FocusAreas: ["Software engineering"],
+                    Links: [])
+            ]);
+
+        var source = new FileSystemEvidenceSource(inventory, documents);
+        var profile = Assert.Single(source.GetAllEvidence());
+        Assert.Equal(approvedReplacement, profile.Item.SourceUrl);
     }
 
     [Theory]
