@@ -250,15 +250,13 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
 
         foreach (var link in item.Links)
         {
-            if (!linksSection!.Content.Contains(link.Url, StringComparison.Ordinal))
+            if (!EvidenceProfileLink.ContainsExactUrl(linksSection!.Content, link.Url))
             {
                 throw new InvalidOperationException(
                     $"Profile item '{item.Id}' link '{link.Url}' is not documented in '{item.DocumentPath}#links'.");
             }
 
-            if (!linksSection.Claims.Any(c =>
-                    string.Equals(c.Status, EvidenceStatus.Verified, StringComparison.OrdinalIgnoreCase) &&
-                    c.Statement.Contains(link.Url, StringComparison.Ordinal)))
+            if (!linksSection.Claims.Any(c => EvidenceProfileLink.MatchesVerifiedClaim(link, c)))
             {
                 throw new InvalidOperationException(
                     $"Profile item '{item.Id}' link '{link.Url}' has no matching verified claim in '{item.DocumentPath}#links'.");
@@ -276,52 +274,70 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
             .Where(line => !string.IsNullOrWhiteSpace(line))
             .ToList();
 
-        var retainedLines = allLinkLines
-            .Where(line => item.Links.Any(link => line.Contains(link.Url, StringComparison.Ordinal)))
-            .ToList();
-
-        var removedLines = allLinkLines
-            .Except(retainedLines, StringComparer.Ordinal)
-            .ToHashSet(StringComparer.Ordinal);
-
-        var updatedMarkdown = removedLines.Count == 0
-            ? markdown
-            : string.Join(
-                "\n",
-                markdown
-                    .Split('\n')
-                    .Where(line => !removedLines.Contains(line.TrimEnd('\r'))));
-
         var retainedLinkClaims = linksSection.Claims
-            .Where(claim => item.Links.Any(link => claim.Statement.Contains(link.Url, StringComparison.Ordinal)))
+            .Where(claim => item.Links.Any(link => EvidenceProfileLink.MatchesVerifiedClaim(link, claim)))
             .ToList();
 
-        var removedLinkClaimIds = linksSection.Claims
+        var removedLinkClaims = linksSection.Claims
+            .Where(c => !retainedLinkClaims.Any(r => string.Equals(r.ClaimId, c.ClaimId, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        var removedLinkClaimIds = removedLinkClaims
             .Select(c => c.ClaimId)
-            .Except(retainedLinkClaims.Select(c => c.ClaimId), StringComparer.OrdinalIgnoreCase)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var updatedItem = removedLinkClaimIds.Count == 0
+        var sourceUrlWasWithdrawn = !string.IsNullOrWhiteSpace(item.SourceUrl)
+            && !item.Links.Any(link => string.Equals(link.Url, item.SourceUrl, StringComparison.Ordinal))
+            && (EvidenceProfileLink.ContainsExactUrl(linksSection.Content, item.SourceUrl)
+                || removedLinkClaims.Any(c => EvidenceProfileLink.ContainsExactUrl(c.Statement, item.SourceUrl)));
+
+        var updatedItem = removedLinkClaimIds.Count == 0 && !sourceUrlWasWithdrawn
             ? item
             : item with
             {
+                SourceUrl = sourceUrlWasWithdrawn ? item.Links.FirstOrDefault()?.Url : item.SourceUrl,
                 Claims = item.Claims
                     .Where(c => !removedLinkClaimIds.Contains(c.ClaimId))
                     .ToList()
             };
 
-        if (retainedLines.Count == 0 || retainedLinkClaims.Count == 0)
+        if (item.Links.Count == 0 || retainedLinkClaims.Count == 0)
         {
             var remainingSections = sections
                 .Where(s => !string.Equals(s.Slug, "links", StringComparison.OrdinalIgnoreCase))
                 .ToList();
-            return (updatedItem, remainingSections, updatedMarkdown);
+            return (updatedItem, remainingSections, ReplaceLinksSectionInMarkdown(markdown, null));
         }
+
+        var renderedLines = new List<string>(item.Links.Count);
+        foreach (var link in item.Links)
+        {
+            var cleanLines = allLinkLines
+                .Where(line => EvidenceProfileLink.IsCleanLineForLink(line, link))
+                .ToList();
+
+            if (cleanLines.Count > 0)
+            {
+                renderedLines.AddRange(cleanLines);
+            }
+            else
+            {
+                foreach (var claim in retainedLinkClaims.Where(c => EvidenceProfileLink.MatchesVerifiedClaim(link, c)))
+                {
+                    renderedLines.Add($"- {claim.Statement}");
+                }
+            }
+        }
+
+        var updatedContent = string.Join("\n", renderedLines);
+        var updatedMarkdown = string.Equals(updatedContent, linksSection.Content, StringComparison.Ordinal)
+            ? markdown
+            : ReplaceLinksSectionInMarkdown(markdown, updatedContent);
 
         var updatedLinksSection = new EvidenceSection(
             linksSection.Heading,
             linksSection.Slug,
-            string.Join("\n", retainedLines),
+            updatedContent,
             retainedLinkClaims);
 
         var updatedSections = sections
@@ -329,5 +345,45 @@ public sealed class FileSystemEvidenceSource : IEvidenceSource
             .ToList();
 
         return (updatedItem, updatedSections, updatedMarkdown);
+    }
+
+    private static string ReplaceLinksSectionInMarkdown(string markdown, string? replacementContent)
+    {
+        var lines = markdown.Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+        var result = new List<string>(lines.Count);
+        var inLinksSection = false;
+
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                var heading = line[3..].Trim();
+                if (string.Equals(heading, "Links", StringComparison.OrdinalIgnoreCase))
+                {
+                    inLinksSection = true;
+                    if (!string.IsNullOrWhiteSpace(replacementContent))
+                    {
+                        result.Add(line);
+                        result.Add(string.Empty);
+                        result.AddRange(replacementContent.Split('\n'));
+                        result.Add(string.Empty);
+                    }
+
+                    continue;
+                }
+
+                if (inLinksSection)
+                {
+                    inLinksSection = false;
+                }
+            }
+
+            if (!inLinksSection)
+            {
+                result.Add(line);
+            }
+        }
+
+        return string.Join("\n", result).TrimEnd();
     }
 }

@@ -137,6 +137,133 @@ public sealed record EvidenceProfileLink(string Platform, string Url)
         return false;
     }
 
+    public static IReadOnlyList<string> ExtractUrls(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return [];
+        }
+
+        var urls = new List<string>();
+        var searchIndex = 0;
+
+        while (searchIndex < text.Length)
+        {
+            var httpsIndex = text.IndexOf("https://", searchIndex, StringComparison.OrdinalIgnoreCase);
+            var httpIndex = text.IndexOf("http://", searchIndex, StringComparison.OrdinalIgnoreCase);
+
+            int matchIndex;
+            if (httpsIndex < 0)
+            {
+                matchIndex = httpIndex;
+            }
+            else if (httpIndex < 0)
+            {
+                matchIndex = httpsIndex;
+            }
+            else
+            {
+                matchIndex = Math.Min(httpsIndex, httpIndex);
+            }
+
+            if (matchIndex < 0)
+            {
+                break;
+            }
+
+            if (matchIndex > 0 && char.IsLetterOrDigit(text[matchIndex - 1]))
+            {
+                searchIndex = matchIndex + 1;
+                continue;
+            }
+
+            var endIndex = matchIndex;
+            while (endIndex < text.Length &&
+                   !char.IsWhiteSpace(text[endIndex]) &&
+                   text[endIndex] is not ('<' or '>' or '"' or '\'' or '`' or ')' or ']'))
+            {
+                endIndex++;
+            }
+
+            var candidate = text[matchIndex..endIndex].TrimEnd('.', ',', ';', ':', '!', '?');
+            if (!string.IsNullOrEmpty(candidate))
+            {
+                urls.Add(candidate);
+            }
+
+            searchIndex = endIndex;
+        }
+
+        return urls;
+    }
+
+    public static bool ContainsExactUrl(string? text, string expectedUrl) =>
+        ExtractUrls(text).Contains(expectedUrl, StringComparer.Ordinal);
+
+    public static bool MatchesVerifiedClaim(EvidenceProfileLink link, EvidenceClaim claim)
+    {
+        if (link is null ||
+            claim is null ||
+            !string.Equals(claim.Status, EvidenceStatus.Verified, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var urls = ExtractUrls(claim.Statement);
+        if (urls.Count != 1 || !string.Equals(urls[0], link.Url, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return ContainsPlatformWord(claim.Statement, link.Platform) &&
+               !ContainsOtherPlatformWord(claim.Statement, link.Platform);
+    }
+
+    public static bool IsCleanLineForLink(string line, EvidenceProfileLink link)
+    {
+        var urls = ExtractUrls(line);
+        if (urls.Count != 1 || !string.Equals(urls[0], link.Url, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return !ContainsOtherPlatformWord(line, link.Platform);
+    }
+
+    private static bool ContainsPlatformWord(string text, string platform)
+    {
+        var index = 0;
+        while (index < text.Length)
+        {
+            var match = text.IndexOf(platform, index, StringComparison.OrdinalIgnoreCase);
+            if (match < 0)
+            {
+                return false;
+            }
+
+            var beforeOk = match == 0 || !char.IsLetterOrDigit(text[match - 1]);
+            var afterIndex = match + platform.Length;
+            var afterOk = afterIndex >= text.Length || !char.IsLetterOrDigit(text[afterIndex]);
+            if (beforeOk && afterOk)
+            {
+                return true;
+            }
+
+            index = match + 1;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsOtherPlatformWord(string text, string allowedPlatform)
+    {
+        var otherPlatform = string.Equals(allowedPlatform, LinkedInPlatform, StringComparison.OrdinalIgnoreCase)
+            ? GitHubPlatform
+            : LinkedInPlatform;
+
+        return ContainsPlatformWord(text, otherPlatform);
+    }
+
     private static string NormalizePlatform(string? platform, string itemIdentifier)
     {
         if (string.IsNullOrWhiteSpace(platform))

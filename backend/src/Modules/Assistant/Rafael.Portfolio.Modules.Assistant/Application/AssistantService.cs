@@ -31,6 +31,29 @@ public sealed class AssistantService : IAssistantService
         "gitlab"
     ];
 
+    private static readonly string[] ExplicitLinkIntentWords =
+    [
+        "link",
+        "links",
+        "url",
+        "urls",
+        "where"
+    ];
+
+    private static readonly HashSet<string> GenericProfileQueryWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of",
+        "with", "by", "from", "up", "about", "into", "over", "after", "is", "are",
+        "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+        "did", "will", "would", "shall", "should", "may", "might", "must", "can",
+        "could", "it", "its", "this", "that", "these", "those", "what", "where",
+        "who", "how", "when", "which", "find", "show", "tell", "me", "his", "her",
+        "say", "says", "said", "rafael", "patino", "public", "profile", "owner",
+        "maintained", "confirmed", "lists", "listed", "section", "record", "above",
+        "linked", "link", "links", "url", "urls", "account", "page", "site",
+        "github", "linkedin", "twitter", "instagram", "youtube", "gitlab", "riippex"
+    };
+
     private readonly IAssistantEvidenceAdapter _evidenceAdapter;
     private readonly IAssistantSynthesizer _synthesizer;
     private readonly IAssistantSafetyEvaluator _safetyEvaluator;
@@ -200,54 +223,198 @@ public sealed class AssistantService : IAssistantService
 
         if (requestedPlatforms.Count > 0)
         {
+            var hasSubstantiveMatch = HasSubstantiveNonLinkMatch(request.Message, verifiedChunks);
             var linksChunk = verifiedChunks.FirstOrDefault(chunk =>
                 string.Equals(chunk.SectionSlug, "links", StringComparison.OrdinalIgnoreCase));
+            var scopedLinksChunk = linksChunk is null
+                ? null
+                : TryScopeLinksChunk(linksChunk, requestedPlatforms);
 
-            if (linksChunk is null)
+            if (!hasSubstantiveMatch)
             {
-                return [];
+                return scopedLinksChunk is null ? [] : [scopedLinksChunk];
             }
 
-            var lines = linksChunk.Content
-                .Split('\n')
-                .Select(line => line.TrimEnd('\r'))
-                .Where(line => !string.IsNullOrWhiteSpace(line))
-                .ToList();
+            var asksForExplicitLink =
+                ExplicitLinkIntentWords.Any(word => ContainsPhrase(paddedQuery, word));
 
-            if (requestedPlatforms.Any(platform =>
-                    !lines.Any(line => ContainsPhrase($" {NormalizeWords(line)} ", platform))))
+            if (!asksForExplicitLink)
             {
-                return [];
+                return verifiedChunks
+                    .Where(chunk => !string.Equals(chunk.SectionSlug, "links", StringComparison.OrdinalIgnoreCase))
+                    .Take(VerifiedChunkLimit)
+                    .ToList();
             }
 
-            var matchingLines = lines
-                .Where(line => requestedPlatforms.Any(platform =>
-                    ContainsPhrase($" {NormalizeWords(line)} ", platform)))
+            return verifiedChunks
+                .Select(chunk => string.Equals(chunk.SectionSlug, "links", StringComparison.OrdinalIgnoreCase)
+                    ? scopedLinksChunk
+                    : chunk)
+                .Where(chunk => chunk is not null)
+                .Select(chunk => chunk!)
+                .Take(VerifiedChunkLimit)
                 .ToList();
-
-            var matchingApprovedClaims = (linksChunk.ApprovedClaims ?? [])
-                .Where(claim => requestedPlatforms.Any(platform =>
-                    ContainsPhrase($" {NormalizeWords(claim.Statement)} ", platform)))
-                .ToList();
-
-            var matchingClaimIds = matchingApprovedClaims.Count > 0
-                ? matchingApprovedClaims.Select(claim => claim.ClaimId).ToList()
-                : linksChunk.Claims;
-
-            return
-            [
-                linksChunk with
-                {
-                    Content = string.Join("\n", matchingLines),
-                    Claims = matchingClaimIds,
-                    ApprovedClaims = matchingApprovedClaims.Count > 0 ? matchingApprovedClaims : linksChunk.ApprovedClaims
-                }
-            ];
         }
 
         return verifiedChunks
             .Take(VerifiedChunkLimit)
             .ToList();
+    }
+
+    private static bool HasSubstantiveNonLinkMatch(
+        string message,
+        IReadOnlyList<AssistantEvidenceChunk> verifiedChunks)
+    {
+        var specificQueryWords = NormalizeWords(message)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(word => word.Length >= 2 && !GenericProfileQueryWords.Contains(word))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (specificQueryWords.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var chunk in verifiedChunks)
+        {
+            if (string.Equals(chunk.SectionSlug, "links", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(chunk.SectionSlug, "overview", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(chunk.SectionSlug, "summary", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var paddedSectionWords = $" {NormalizeWords($"{chunk.SectionHeading} {chunk.Content}")} ";
+            foreach (var word in specificQueryWords)
+            {
+                if (ContainsWordOrStem(paddedSectionWords, word))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsWordOrStem(string paddedSectionWords, string word)
+    {
+        if (ContainsPhrase(paddedSectionWords, word))
+        {
+            return true;
+        }
+
+        if (word.Length > 4 && word.EndsWith("ies", StringComparison.Ordinal) &&
+            ContainsPhrase(paddedSectionWords, word[..^3] + "y"))
+        {
+            return true;
+        }
+
+        if (word.Length > 4 && word.EndsWith("es", StringComparison.Ordinal) &&
+            ContainsPhrase(paddedSectionWords, word[..^2]))
+        {
+            return true;
+        }
+
+        if (word.Length > 3 && word.EndsWith('s') && !word.EndsWith("ss", StringComparison.Ordinal) &&
+            ContainsPhrase(paddedSectionWords, word[..^1]))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static AssistantEvidenceChunk? TryScopeLinksChunk(
+        AssistantEvidenceChunk linksChunk,
+        IReadOnlyList<string> requestedPlatforms)
+    {
+        var lines = linksChunk.Content
+            .Split('\n')
+            .Select(line => line.TrimEnd('\r'))
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToList();
+
+        var approvedClaims = linksChunk.ApprovedClaims;
+        if (approvedClaims is { Count: > 0 })
+        {
+            var matchingApprovedClaims = new List<AssistantApprovedClaim>();
+            var renderedLines = new List<string>();
+
+            foreach (var platform in requestedPlatforms)
+            {
+                var platformClaims = approvedClaims
+                    .Where(claim =>
+                        string.Equals(claim.Status, VerifiedEvidenceStatus, StringComparison.OrdinalIgnoreCase) &&
+                        ContainsPhrase($" {NormalizeWords(claim.Statement)} ", platform) &&
+                        !LinkPlatformNames.Any(other =>
+                            !string.Equals(other, platform, StringComparison.OrdinalIgnoreCase) &&
+                            ContainsPhrase($" {NormalizeWords(claim.Statement)} ", other)))
+                    .ToList();
+
+                if (platformClaims.Count == 0)
+                {
+                    return null;
+                }
+
+                foreach (var claim in platformClaims)
+                {
+                    if (!matchingApprovedClaims.Any(c => string.Equals(c.ClaimId, claim.ClaimId, StringComparison.Ordinal)))
+                    {
+                        matchingApprovedClaims.Add(claim);
+                    }
+                }
+
+                var cleanLines = lines
+                    .Where(line =>
+                        ContainsPhrase($" {NormalizeWords(line)} ", platform) &&
+                        !LinkPlatformNames.Any(other =>
+                            !string.Equals(other, platform, StringComparison.OrdinalIgnoreCase) &&
+                            ContainsPhrase($" {NormalizeWords(line)} ", other)))
+                    .ToList();
+
+                if (cleanLines.Count > 0)
+                {
+                    renderedLines.AddRange(cleanLines);
+                }
+                else
+                {
+                    renderedLines.AddRange(platformClaims.Select(claim => $"- {claim.Statement}"));
+                }
+            }
+
+            return linksChunk with
+            {
+                Content = string.Join("\n", renderedLines.Distinct(StringComparer.Ordinal)),
+                Claims = matchingApprovedClaims.Select(claim => claim.ClaimId).ToList(),
+                ApprovedClaims = matchingApprovedClaims
+            };
+        }
+
+        if (requestedPlatforms.Any(platform =>
+                !lines.Any(line => ContainsPhrase($" {NormalizeWords(line)} ", platform))))
+        {
+            return null;
+        }
+
+        var matchingLines = lines
+            .Where(line =>
+                requestedPlatforms.Any(platform => ContainsPhrase($" {NormalizeWords(line)} ", platform)) &&
+                !LinkPlatformNames.Any(other =>
+                    !requestedPlatforms.Contains(other, StringComparer.OrdinalIgnoreCase) &&
+                    ContainsPhrase($" {NormalizeWords(line)} ", other)))
+            .ToList();
+
+        if (matchingLines.Count == 0)
+        {
+            return null;
+        }
+
+        return linksChunk with
+        {
+            Content = string.Join("\n", matchingLines)
+        };
     }
 
     private static bool IsVerified(AssistantEvidenceChunk chunk) =>

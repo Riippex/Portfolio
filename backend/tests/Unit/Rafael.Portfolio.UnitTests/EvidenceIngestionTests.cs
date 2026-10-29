@@ -384,8 +384,124 @@ public sealed class EvidenceIngestionTests
 
         Assert.Contains("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", linksSection.Content);
         Assert.DoesNotContain("https://github.com/Riippex", linksSection.Content);
+        Assert.DoesNotContain("https://github.com/Riippex", profile.RawMarkdown);
         Assert.Equal(["claim-profile-08"], linksSection.Claims.Select(c => c.ClaimId));
         Assert.Equal(["claim-profile-08"], profile.Item.Claims.Select(c => c.ClaimId));
+    }
+
+    [Theory]
+    [InlineData("linkedin", "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", "https://github.com/Riippex", "claim-profile-08")]
+    [InlineData("github", "https://github.com/Riippex", "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", "claim-profile-09")]
+    public void Ingestion_removes_withdrawn_link_even_when_both_links_share_one_markdown_line(
+        string retainedPlatform,
+        string retainedUrl,
+        string removedUrl,
+        string retainedClaimId)
+    {
+        var mixedLineMarkdown = """
+            # Public professional links diagnostic fixture
+
+            ## Links
+
+            LinkedIn: https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz. GitHub: https://github.com/Riippex.
+            """;
+
+        var documents = new Dictionary<string, string>
+        {
+            ["docs/evidence/profile.md"] = mixedLineMarkdown
+        };
+
+        var inventory = new PublicEvidenceInventory(
+            "2026.10.2",
+            new DateOnly(2026, 10, 27),
+            [
+                new PublicEvidenceItem(
+                    "evidence-profile",
+                    "profile",
+                    "profile",
+                    "Rafael Patiño",
+                    "Summary",
+                    "2026.10.2",
+                    EvidenceStatus.Verified,
+                    "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
+                    "docs/evidence/profile.md",
+                    new DateOnly(2026, 10, 27),
+                    [
+                        new EvidenceClaim(
+                            "claim-profile-08",
+                            "The public LinkedIn profile is https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#links"),
+                        new EvidenceClaim(
+                            "claim-profile-09",
+                            "The public GitHub profile is https://github.com/Riippex.",
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#links")
+                    ],
+                    Headline: "Software & AI Engineer",
+                    FocusAreas: ["Software engineering"],
+                    Links: [new EvidenceProfileLink(retainedPlatform, retainedUrl)])
+            ]);
+
+        var source = new FileSystemEvidenceSource(inventory, documents);
+        var profile = Assert.Single(source.GetAllEvidence());
+        var linksSection = Assert.Single(profile.Sections, s => s.Slug == "links");
+
+        Assert.Contains(retainedUrl, linksSection.Content);
+        Assert.DoesNotContain(removedUrl, linksSection.Content);
+        Assert.DoesNotContain(removedUrl, profile.RawMarkdown);
+        Assert.Equal([retainedClaimId], linksSection.Claims.Select(c => c.ClaimId));
+        Assert.Equal([retainedClaimId], profile.Item.Claims.Select(c => c.ClaimId));
+    }
+
+    [Theory]
+    [InlineData(
+        "- **GitHub:** https://github.com/RiippexExtra.",
+        "The owner-confirmed public GitHub profile is https://github.com/Riippex.")]
+    [InlineData(
+        "- **GitHub:** https://github.com/Riippex.",
+        "The owner-confirmed public GitHub profile is https://github.com/RiippexExtra.")]
+    [InlineData(
+        "- **GitHub:** https://github.com/Riippex.",
+        "The owner-confirmed public LinkedIn profile is https://github.com/Riippex.")]
+    public void Ingestion_rejects_prefix_only_url_match_or_platform_claim_mismatch(
+        string sectionLine,
+        string claimStatement)
+    {
+        var documents = new Dictionary<string, string>
+        {
+            ["docs/evidence/profile.md"] = $"# Profile\n\n## Links\n\n{sectionLine}"
+        };
+
+        var inventory = new PublicEvidenceInventory(
+            "2026.10.2",
+            new DateOnly(2026, 10, 27),
+            [
+                new PublicEvidenceItem(
+                    "evidence-profile",
+                    "profile",
+                    "profile",
+                    "Rafael Patiño",
+                    "Summary",
+                    "2026.10.2",
+                    EvidenceStatus.Verified,
+                    "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
+                    "docs/evidence/profile.md",
+                    new DateOnly(2026, 10, 27),
+                    [
+                        new EvidenceClaim(
+                            "claim-profile-09",
+                            claimStatement,
+                            EvidenceStatus.Verified,
+                            "docs/evidence/profile.md#links")
+                    ],
+                    Headline: "Software & AI Engineer",
+                    FocusAreas: ["Software engineering"],
+                    Links: [new EvidenceProfileLink("github", "https://github.com/Riippex")])
+            ]);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new FileSystemEvidenceSource(inventory, documents));
     }
 
     [Theory]

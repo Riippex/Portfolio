@@ -427,4 +427,243 @@ public sealed class ProfileEvidenceAssistantTests
             Directory.Delete(tempEvidenceDir, recursive: true);
         }
     }
+
+    [Theory]
+    [InlineData(
+        "linkedin",
+        ProfileSource,
+        "claim-profile-08",
+        "What is Rafael's LinkedIn?",
+        "Where can I find Rafael's GitHub?",
+        GitHubProfileUrl,
+        "claim-profile-09")]
+    [InlineData(
+        "github",
+        GitHubProfileUrl,
+        "claim-profile-09",
+        "Where can I find Rafael's GitHub?",
+        "What is Rafael's LinkedIn?",
+        ProfileSource,
+        "claim-profile-08")]
+    public async Task Mixed_single_line_links_markdown_withdraws_removed_platform_across_api_chat_chatasync_and_sse(
+        string retainedPlatform,
+        string retainedUrl,
+        string retainedClaimId,
+        string retainedQuestion,
+        string removedQuestion,
+        string removedUrl,
+        string removedClaimId)
+    {
+        var tempEvidenceDir = Path.Combine(Path.GetTempPath(), $"profile-mixed-links-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(tempEvidenceDir, "projects"));
+
+        try
+        {
+            var repoEvidenceDir = Path.Combine(TestRepositoryRoot.Find(), "docs", "evidence");
+            File.Copy(
+                Path.Combine(repoEvidenceDir, "schema.json"),
+                Path.Combine(tempEvidenceDir, "schema.json"));
+            File.Copy(
+                Path.Combine(repoEvidenceDir, "projects", "vextis.md"),
+                Path.Combine(tempEvidenceDir, "projects", "vextis.md"));
+
+            File.WriteAllText(
+                Path.Combine(tempEvidenceDir, "profile.md"),
+                """
+                # Public professional links diagnostic fixture
+
+                ## Links
+
+                LinkedIn: https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz. GitHub: https://github.com/Riippex.
+                """);
+
+            var manifestPath = Path.Combine(tempEvidenceDir, "inventory.json");
+            File.WriteAllText(
+                manifestPath,
+                $$"""
+                {
+                  "version": "2026.10.2",
+                  "lastUpdated": "2026-10-27",
+                  "items": [
+                    {
+                      "id": "evidence-profile",
+                      "slug": "profile",
+                      "kind": "profile",
+                      "title": "Rafael Patiño",
+                      "summary": "Public professional links.",
+                      "headline": "Software & AI Engineer",
+                      "focusAreas": ["Software engineering"],
+                      "version": "2026.10.2",
+                      "evidenceStatus": "verified",
+                      "sourceUrl": "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
+                      "documentPath": "docs/evidence/profile.md",
+                      "lastReviewed": "2026-10-27",
+                      "links": [
+                        { "platform": "{{retainedPlatform}}", "url": "{{retainedUrl}}" }
+                      ],
+                      "claims": [
+                        {
+                          "claimId": "claim-profile-08",
+                          "statement": "The public LinkedIn profile is https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz.",
+                          "status": "verified",
+                          "citation": "docs/evidence/profile.md#links"
+                        },
+                        {
+                          "claimId": "claim-profile-09",
+                          "statement": "The public GitHub profile is https://github.com/Riippex.",
+                          "status": "verified",
+                          "citation": "docs/evidence/profile.md#links"
+                        }
+                      ]
+                    },
+                    {
+                      "id": "evidence-project-vextis",
+                      "slug": "vextis",
+                      "kind": "project",
+                      "title": "Vextis",
+                      "summary": "Project evidence remains pending.",
+                      "version": "2026.09",
+                      "evidenceStatus": "pending",
+                      "sourceUrl": null,
+                      "documentPath": "docs/evidence/projects/vextis.md",
+                      "lastReviewed": "2026-09-28",
+                      "claims": []
+                    }
+                  ]
+                }
+                """);
+
+            await using var host = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Development");
+                builder.UseSetting("Portfolio:Stage", "local");
+                builder.UseSetting("EvidenceInventory:ManifestPath", manifestPath);
+            });
+
+            var service = host.Services.GetRequiredService<IAssistantService>();
+            using var client = host.CreateClient();
+
+            var profileJson = await client.GetStringAsync("/v1/profile");
+            Assert.Contains(retainedUrl, profileJson);
+            Assert.DoesNotContain(removedUrl, profileJson);
+
+            var evidenceJson = await client.GetStringAsync("/v1/evidence/profile");
+            Assert.Contains(retainedClaimId, evidenceJson);
+            Assert.DoesNotContain(removedClaimId, evidenceJson);
+            Assert.DoesNotContain(removedUrl, evidenceJson);
+
+            // Sync Chat & Async ChatAsync (without modelConsent) for removed platform
+            var removedSync = service.Chat(new AssistantChatRequest(removedQuestion));
+            Assert.Equal(AssistantGroundingStatus.NotDocumented, removedSync.GroundingStatus);
+            Assert.Empty(removedSync.Citations);
+            Assert.DoesNotContain(removedUrl, removedSync.Answer);
+
+            var removedAsync = await service.ChatAsync(new AssistantChatRequest(removedQuestion));
+            Assert.Equal(AssistantGroundingStatus.NotDocumented, removedAsync.GroundingStatus);
+            Assert.Empty(removedAsync.Citations);
+            Assert.DoesNotContain(removedUrl, removedAsync.Answer);
+
+            using var removedHttp = await client.PostAsJsonAsync("/v1/assistant/chat", new { message = removedQuestion });
+            Assert.Equal(HttpStatusCode.OK, removedHttp.StatusCode);
+            var removedHttpBody = await removedHttp.Content.ReadAsStringAsync();
+            Assert.Contains("\"groundingStatus\":\"not_documented\"", removedHttpBody);
+            Assert.Contains("\"citations\":[]", removedHttpBody);
+            Assert.DoesNotContain(removedUrl, removedHttpBody);
+            Assert.DoesNotContain(retainedClaimId, removedHttpBody);
+
+            using var removedStream = await client.PostAsJsonAsync("/v1/assistant/chat/stream", new { message = removedQuestion });
+            Assert.Equal(HttpStatusCode.OK, removedStream.StatusCode);
+            var removedSse = await removedStream.Content.ReadAsStringAsync();
+            Assert.Contains("\"groundingStatus\":\"not_documented\"", removedSse);
+            Assert.DoesNotContain("event: citation", removedSse);
+            Assert.DoesNotContain(removedUrl, removedSse);
+            Assert.DoesNotContain(retainedClaimId, removedSse);
+
+            // Retained platform still works across Chat, ChatAsync, HTTP chat and SSE
+            var retainedAsync = await service.ChatAsync(new AssistantChatRequest(retainedQuestion));
+            Assert.Equal(AssistantGroundingStatus.Grounded, retainedAsync.GroundingStatus);
+            Assert.Contains(retainedUrl, retainedAsync.Answer);
+            Assert.DoesNotContain(removedUrl, retainedAsync.Answer);
+            var retainedCitation = Assert.Single(retainedAsync.Citations);
+            Assert.Equal([retainedClaimId], retainedCitation.Claims);
+
+            using var retainedHttp = await client.PostAsJsonAsync("/v1/assistant/chat", new { message = retainedQuestion });
+            Assert.Equal(HttpStatusCode.OK, retainedHttp.StatusCode);
+            var retainedHttpBody = await retainedHttp.Content.ReadAsStringAsync();
+            Assert.Contains("\"groundingStatus\":\"grounded\"", retainedHttpBody);
+            Assert.Contains(retainedUrl, retainedHttpBody);
+            Assert.Contains(retainedClaimId, retainedHttpBody);
+            Assert.DoesNotContain(removedUrl, retainedHttpBody);
+        }
+        finally
+        {
+            Directory.Delete(tempEvidenceDir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(
+        "Tell me about the AI Engineer role at Expinn listed on LinkedIn",
+        "Experience",
+        "claim-profile-05",
+        "announces an AI Engineer role at Expinn")]
+    [InlineData(
+        "What does Rafael's LinkedIn profile say about his studies at Universidad Manuela Beltran?",
+        "Studies",
+        "claim-profile-04",
+        "in progress")]
+    public async Task Questions_about_studies_or_experience_mentioning_linkedin_preserve_documented_section_answers(
+        string message,
+        string expectedSection,
+        string expectedClaimId,
+        string expectedText)
+    {
+        await using var host = CreateHost();
+        var service = host.Services.GetRequiredService<IAssistantService>();
+
+        var syncResponse = service.Chat(new AssistantChatRequest(message));
+        Assert.Equal(AssistantGroundingStatus.Grounded, syncResponse.GroundingStatus);
+        Assert.Contains(expectedText, syncResponse.Answer);
+        Assert.Contains(syncResponse.Citations, c => c.SectionHeading == expectedSection && c.Claims.Contains(expectedClaimId));
+        Assert.DoesNotContain(syncResponse.Citations, c => c.SectionHeading == "Links" || c.Claims.Contains("claim-profile-08"));
+
+        var asyncResponse = await service.ChatAsync(new AssistantChatRequest(message));
+        Assert.Equal(AssistantGroundingStatus.Grounded, asyncResponse.GroundingStatus);
+        Assert.Contains(expectedText, asyncResponse.Answer);
+        Assert.Contains(asyncResponse.Citations, c => c.SectionHeading == expectedSection && c.Claims.Contains(expectedClaimId));
+        Assert.DoesNotContain(asyncResponse.Citations, c => c.SectionHeading == "Links" || c.Claims.Contains("claim-profile-08"));
+
+        using var client = host.CreateClient();
+        using var chat = await client.PostAsJsonAsync("/v1/assistant/chat", new { message });
+        Assert.Equal(HttpStatusCode.OK, chat.StatusCode);
+        var chatBody = await chat.Content.ReadAsStringAsync();
+        Assert.Contains("\"groundingStatus\":\"grounded\"", chatBody);
+        Assert.Contains(expectedText, chatBody);
+        Assert.Contains(expectedClaimId, chatBody);
+        Assert.DoesNotContain("claim-profile-08", chatBody);
+
+        using var stream = await client.PostAsJsonAsync("/v1/assistant/chat/stream", new { message });
+        Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
+        var sse = await stream.Content.ReadAsStringAsync();
+        Assert.Contains("\"groundingStatus\":\"grounded\"", sse);
+        Assert.Contains(expectedClaimId, sse);
+        Assert.DoesNotContain("claim-profile-08", sse);
+        Assert.Contains("event: done", sse);
+    }
+
+    [Fact]
+    public async Task Mixed_question_asking_for_both_studies_and_explicit_github_link_returns_both_sections()
+    {
+        await using var host = CreateHost();
+        var service = host.Services.GetRequiredService<IAssistantService>();
+
+        var response = await service.ChatAsync(
+            new AssistantChatRequest("What are Rafael's studies at Universidad Manuela Beltran and where is his GitHub link?"));
+
+        Assert.Equal(AssistantGroundingStatus.Grounded, response.GroundingStatus);
+        Assert.Contains("in progress", response.Answer);
+        Assert.Contains(GitHubProfileUrl, response.Answer);
+        Assert.Contains(response.Citations, c => c.SectionHeading == "Studies" && c.Claims.Contains("claim-profile-04"));
+        Assert.Contains(response.Citations, c => c.SectionHeading == "Links" && c.Claims.SequenceEqual(["claim-profile-09"]));
+    }
 }
