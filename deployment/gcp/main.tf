@@ -19,13 +19,12 @@ locals {
   # (var.environment) never selects this value; Development stays a local-only mode.
   aspnetcore_environment = "Production"
 
-  # Secrets the service reads at startup. The contact API token is intentionally absent:
-  # Contact is disabled, so it needs no credentials until a separate, owner-authorized
-  # activation adds them.
-  runtime_secrets = {
+  # Security containers always exist. Contact containers are prepared only by an
+  # explicit gate; disabled Contact never reads their versions at startup.
+  runtime_secrets = merge({
     turnstile_secret_key  = "turnstile-secret-key"
     proxy_identity_secret = "proxy-identity-secret"
-  }
+  }, local.contact_prepared_secrets)
 
   # The shared model control database is owned by deployment/control-ledger and is reached by
   # project and database id only. Unset, the service receives no store configuration and paid
@@ -78,6 +77,14 @@ resource "google_secret_manager_secret" "runtime" {
 
   replication {
     auto {}
+  }
+
+  lifecycle {
+    prevent_destroy = true
+    precondition {
+      condition     = var.contact == null ? true : (!var.contact.prepare_secrets || (var.create_service && contains(["dev", "prod"], var.environment)))
+      error_message = "Contact preparation requires the established dev/prod service phase."
+    }
   }
 
   depends_on = [
@@ -175,7 +182,20 @@ resource "google_cloud_run_v2_service" "backend" {
 
       env {
         name  = "Contact__Enabled"
-        value = "false"
+        value = tostring(local.contact_enabled)
+      }
+
+      dynamic "env" {
+        for_each = local.contact_runtime_secrets
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.runtime[env.value].secret_id
+              version = "latest"
+            }
+          }
+        }
       }
 
       env {

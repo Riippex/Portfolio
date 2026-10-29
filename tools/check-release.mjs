@@ -26,6 +26,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { contactDeploymentViolations } from "./contact-deployment-policy.mjs";
 
 // Every declared file is required: a missing one is a violation, never a silent skip.
 export const CHECKED_FILES = [
@@ -38,6 +39,8 @@ export const CHECKED_FILES = [
   "docs/data-handling.md",
   "docs/architecture.md",
   "deployment/gcp/main.tf",
+  "deployment/gcp/contact.tf",
+  "tools/contact-deployment-policy.mjs",
   "deployment/gcp/variables.tf",
   "deployment/cloudflare/main.tf",
   "deployment/cloudflare/variables.tf",
@@ -287,12 +290,7 @@ export function checkRelease(files) {
   if (!/name\s*=\s*"ASPNETCORE_ENVIRONMENT"\s*\n\s*value\s*=\s*local\.aspnetcore_environment/.test(gcpMain)) {
     fail("runtime-safety", "ASPNETCORE_ENVIRONMENT is not set from local.aspnetcore_environment");
   }
-  if (!/name\s*=\s*"Contact__Enabled"\s*\n\s*value\s*=\s*"false"/.test(gcpMain)) {
-    fail("contact-disabled", "Contact__Enabled must be explicitly false on the service");
-  }
-  if (/Contact__ApiToken|contact[-_]api[-_]token/.test(gcpMain)) {
-    fail("contact-disabled", "the service must not depend on a contact credential while Contact is disabled");
-  }
+  for (const violation of contactDeploymentViolations(files)) fail("contact-disabled", violation);
 
   // 4. Scaling and size limits are wired from the variables that carry the bounds ---------
   const service = hclBlock(gcpMain, /resource\s+"google_cloud_run_v2_service"\s+"backend"/) ?? "";
@@ -320,7 +318,7 @@ export function checkRelease(files) {
   }
 
   // 5. Managed secrets are exactly those the runbook documents ---------------------------
-  const secretsBlock = /runtime_secrets\s*=\s*\{([^}]*)\}/.exec(gcpMain)?.[1] ?? "";
+  const secretsBlock = /runtime_secrets\s*=\s*merge\(\{([^}]*)\}/.exec(gcpMain)?.[1] ?? "";
   const managedSecrets = [...secretsBlock.matchAll(/=\s*"([a-z0-9-]+)"/g)].map((match) => match[1]);
   if (managedSecrets.length === 0) fail("secrets", "no managed runtime secrets found in deployment/gcp/main.tf");
 

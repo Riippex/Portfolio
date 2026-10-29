@@ -36,7 +36,7 @@ The portfolio follows the [Data handling policy](../data-handling.md). The table
 | **Session-transient input** | Chat turns, vacancy text, contact messages | Processed in memory for the duration of the request and then dropped. | Transit through Cloudflare and Google Cloud infrastructure. |
 | **Short-lived control state** | Rate-limit buckets, Turnstile outcomes | In-memory sliding windows keyed by pseudonymous identifiers, with TTL eviction; lost on restart. | Turnstile verification is performed by Cloudflare. |
 | **Sensitive ephemeral material** | Visitor name, email address, message body | Validated and bounded (64 KiB request body, 5,000-character message) and relayed. Application logs carry fixed outcome codes, status, latency, and a pseudonymous client hash (by code review of `ContactEndpoints.cs`; not asserted by an automated test). | When Contact is activated, Cloudflare Email Service processes the message and the recipient mailbox keeps it until the owner deletes it. Neither is under the application's control and neither is zero-retention. See the [Contact runbook](contact.md). |
-| **Secrets & Credentials** | Turnstile secret, proxy identity secret | Two managed Secret Manager secrets, `turnstile-secret-key` and `proxy-identity-secret`, plus the Worker secret `ASSISTANT_PROXY_IDENTITY_SECRET`, all populated out of band. No contact credential exists while Contact is disabled. Values are not in git or Terraform by design. | The secret stores themselves. |
+| **Secrets & Credentials** | Turnstile secret, proxy identity secret; optional Contact configuration | By default, two managed Secret Manager secrets, `turnstile-secret-key` and `proxy-identity-secret`, plus the Worker secret `ASSISTANT_PROXY_IDENTITY_SECRET`, all populated out of band. Explicit Contact preparation adds four empty managed containers and secret-scoped runtime access. Disabled Contact never references their versions at startup. Values are not in git or Terraform by design. | The secret stores themselves. |
 
 ### Design invariants and how each is checked
 
@@ -49,7 +49,7 @@ The portfolio follows the [Data handling policy](../data-handling.md). The table
 
 ## Contact Activation Boundary
 
-- **Contact is disabled.** Terraform sets `Contact__Enabled=false` on the service, the endpoint answers 503, and no contact credential is provisioned or read at startup. A release does not activate Contact.
+- **Contact is disabled by default.** With `contact=null`, Terraform sets `Contact__Enabled=false`, the endpoint answers 503, and no Contact container or startup credential reference exists. Optional preparation creates four empty containers/accessor bindings while keeping the service off; reviewed enablement is a separate gated configuration. A code release alone does not activate Contact.
 - **Activation is owner-authorized.** It needs the prerequisites in the [Contact runbook](contact.md): a Cloudflare-managed sender domain, a verified destination, a scoped API token, a reviewed provider and mailbox retention position, a mailbox cleanup process the owner defines and verifies, and one authorized live smoke send recorded separately from automated tests.
 - **Retention is scoped.** The application stores nothing. Cloudflare's processing and the recipient mailbox retain data under their own policies and are not purged by the application.
 - **Offline is not live.** Fake-provider tests show the relay behaves correctly against the documented response shape. They do not show that a real message was sent, accepted, or delivered.
@@ -89,6 +89,7 @@ Provenance: the Cloudflare page was fetched directly (it states it was last upda
 - Secrets: the two managed secrets with one active version each, read twice per instance start.
 - Not included: domain registration, taxes, and other usage on the same billing account that shares the free tiers.
 - **Contact (optional, disabled):** Cloudflare Email Service costs are not estimated here. The service is documented as beta, and its pricing and the account's entitlement must be confirmed at https://developers.cloudflare.com/email-service/platform/pricing/ before activation. The Contact runbook lists the prerequisites.
+- **Contact preparation:** four additional Secret Manager containers have no payload until populated out of band. Once populated, the default six active versions across this project's security and Contact configuration use the six-version free allowance only if it is not consumed elsewhere on the billing account. Reads, rotations, other projects and subsequent versions may incur charges. Mailbox/provider processing is separate.
 
 ### Estimated monthly cost (USD)
 
@@ -121,7 +122,7 @@ Provenance: the Cloudflare page was fetched directly (it states it was last upda
 
 | Check | Establishes | Does not establish |
 |---|---|---|
-| `tools/check-release.mjs` and its tests | Every declared file exists and is wired as the release relies on; the evidence inventory satisfies the canonical schema (a documented subset) and the deny-by-default governance rules; the Cloud Run service takes its scaling and size limits from the checked variables, runs `Production`, and has Contact disabled; no tracked file carries a non-placeholder email address; this runbook's cost and privacy statements are present and scoped. | Zero persistence (its persistence checks are **tripwires**: a match proves a regression, no match proves nothing), enforced spending, or live behavior. Full JSON Schema validation and citation resolution are delegated to `EvidenceSchemaValidationTests`, `EvidenceInventoryTests`, and `EvidenceIngestionTests`, which run in the same CI. |
+| `tools/check-release.mjs` and its tests | Every declared file exists and is wired as the release relies on; the evidence inventory satisfies the canonical schema (a documented subset) and the deny-by-default governance rules; the Cloud Run service takes its scaling and size limits from the checked variables, runs `Production`, and gates Contact preparation/enablement; no tracked file carries a non-placeholder email address; this runbook's cost and privacy statements are present and scoped. | Zero persistence (its persistence checks are **tripwires**: a match proves a regression, no match proves nothing), actual operator review, enforced spending, or live behavior. Full JSON Schema validation and citation resolution are delegated to `EvidenceSchemaValidationTests`, `EvidenceInventoryTests`, and `EvidenceIngestionTests`, which run in the same CI. |
 | `tools/check-deployment.mjs`, `check-terraform-plans.mjs`, `check-wrangler-build.mjs` | The Terraform, Wrangler, and workflow invariants in the infrastructure runbook, and plan-only proofs with synthetic credentials. | Anything about a real project, account, or token. |
 | Unit, architecture, and published-backend integration tests | Behavior of the code and of a published backend started outside the checkout, on Linux in CI. | A deployed environment. |
 

@@ -193,7 +193,7 @@ test("the ledger exception must stay documented with its limit", () => {
 for (const [name, edit, prefix] of [
   ["a non-Production remote runtime", replace('aspnetcore_environment = "Production"', 'aspnetcore_environment = "Development"'), "runtime-safety:remote environment"],
   ["a runtime not taken from the local", replace("value = local.aspnetcore_environment", 'value = "Production"'), "runtime-safety:ASPNETCORE_ENVIRONMENT"],
-  ["Contact enabled", replace('name  = "Contact__Enabled"\n        value = "false"', 'name  = "Contact__Enabled"\n        value = "true"'), "contact-disabled:Contact__Enabled"],
+  ["Contact enabled", replace('value = tostring(local.contact_enabled)', 'value = "true"'), "contact-disabled:Contact__Enabled"],
   ["a contact credential wired in", append('# env contact-api-token\nenv { name = "Contact__ApiToken" }'), "contact-disabled:the service must not depend"],
 ]) {
   test(`detects ${name}`, () => {
@@ -454,6 +454,7 @@ test("the CLI error path redacts an address that appears in a path or message", 
   mkdirSync(join(base, "tools"), { recursive: true });
   try {
     writeFileSync(join(base, "tools", "check-release.mjs"), readFileSync(join(root, "tools", "check-release.mjs")));
+    writeFileSync(join(base, "tools", "contact-deployment-policy.mjs"), readFileSync(join(root, "tools", "contact-deployment-policy.mjs")));
     const result = spawnSync(process.execPath, [join(base, "tools", "check-release.mjs")], { encoding: "utf8" });
     const printed = `${result.stdout}\n${result.stderr}`;
     assert.equal(result.status, 1, printed);

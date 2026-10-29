@@ -23,7 +23,7 @@ Each piece has exactly one owner, so infrastructure maintenance cannot undo a re
 | Backend store settings `Assistant__ModelControl__Firestore__*` | Terraform (stage stack) | Project and database id of the shared database, both or neither. |
 | Zone DNS record and Worker route | Terraform (`deployment/cloudflare`) | Off until `enable_custom_domain`. |
 | Turnstile widget | Owner, in the Cloudflare console | The provider would store the widget secret in state, so Terraform does not manage it. |
-| Contact (Cloudflare Email) credentials | Deferred | Contact is disabled; no credential is provisioned or read until a separate, owner-authorized activation. |
+| Contact (Cloudflare Email) configuration | Terraform gate plus owner-managed Secret Manager values | Default `contact=null` is off. Explicit preparation creates four empty protected containers/accessor bindings; only separately reviewed enablement adds startup secret references. No payload is a Terraform input. See the Contact runbook. |
 
 ## Runtime safety of remote deployments
 

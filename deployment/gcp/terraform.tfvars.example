@@ -42,6 +42,18 @@ control_ledger_database_id = ""
 # Do not copy pricing/review attestations blindly; see vertex-provider.md.
 vertex = null
 
+# Contact is off by default. Preparation creates four empty Secret Manager
+# containers with secret-scoped runtime access, but no startup references.
+# Populate values out of band; never add token/account/address inputs here.
+contact = null
+# contact = {
+#   prepare_secrets = true
+#   enabled = false
+#   provider_reviewed = false
+#   mailbox_cleanup_reviewed = false
+#   delivery_verified = false
+# }
+
 # After configuring the shared ledger above, replace null with a reviewed object:
 # vertex = {
 #   location = "global"

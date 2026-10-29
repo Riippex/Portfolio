@@ -162,3 +162,32 @@ that time because the service is documented as beta.
    then returns 503 without touching the provider.
 
 Until step 7 is recorded, delivery is unverified.
+
+## Terraform-owned preparation and activation
+
+`deployment/gcp/contact.tf` accepts an optional `contact` object, default `null`.
+The default creates no Contact resources and explicitly sets the service switch
+false. Preparation is separate: `prepare_secrets=true` creates four empty Secret
+Manager containers (account identifier, sending token, sender and recipient) and
+secret-scoped accessor bindings for the backend runtime only. Names include the
+explicit stage, so dev and prod do not own the same Contact containers. It requires the
+established dev/prod service phase. No values are Terraform inputs or resources.
+
+Populate versions out of band through the owner console workflow. Disabled
+Contact has no startup reference to these versions and remains usable even if
+the containers are empty. Never put addresses, tokens or provider payloads in
+tfvars, plans, logs, frontend configuration or this document.
+
+Enabling requires `prepare_secrets`, `provider_reviewed`,
+`mailbox_cleanup_reviewed` and `delivery_verified` all true. These are assertions
+of completed operator checks, including an authorized direct-provider synthetic
+delivery before first application enablement; they do not perform those checks.
+Then verify the real form end to end separately. Plans must show only the
+intended stage, four secret references and the explicit enable switch. No
+version is provisioned and no mail is sent by Terraform. The default release
+and production inputs remain disabled.
+
+Rollback sets `enabled=false` while retaining `prepare_secrets=true`; it removes
+startup references without deleting credentials or changing mailbox retention.
+Prepared containers have `prevent_destroy`; removal requires a deliberate code
+change and separate owner-reviewed destructive plan.

@@ -50,7 +50,7 @@ const GCP_INPUTS = [
   "min_instances=0", "max_instances=2", "cpu_limit=1000m", "memory_limit=512Mi",
   "allow_unauthenticated=true", "github_repository=Riippex/Portfolio",
   "workload_identity_pool_id=github-actions-pool", "workload_identity_pool_provider_id=github-provider",
-  "ci_service_account_id=sa-portfolio-ci", "control_ledger_project_id=", "control_ledger_database_id=", "vertex=null",
+  "ci_service_account_id=sa-portfolio-ci", "control_ledger_project_id=", "control_ledger_database_id=", "vertex=null", "contact=null",
 ];
 
 // Synthetic and unique per run, so a hit can only come from this run's input.
@@ -528,6 +528,52 @@ function proveVertexPreparation(work) {
 
 // ---------------------------------------------------------------------------------------
 
+function proveContactPreparation(work) {
+  const empty = join(work, "contact-empty.tfstate");
+  const inputs = ["create_service=true", `container_image=${IMAGE}`];
+  const plan = (name, contact, extra = []) => gcpPlan(work, `contact ${name}`, empty,
+    [...inputs, `contact=${JSON.stringify(contact)}`, ...extra], { save: true });
+  const environments = (run) => run.changes.find((c) => c.type === "google_cloud_run_v2_service")
+    ?.change.after.template[0].containers[0].env ?? [];
+  const secrets = (run) => run.changes.filter((c) => c.type === "google_secret_manager_secret");
+  const bindings = (run) => run.changes.filter((c) => c.type === "google_secret_manager_secret_iam_member");
+  for (const stage of ["dev", "prod"]) {
+    const run = plan(`default ${stage}`, null, [`environment=${stage}`]);
+    record(run.status === 0 && secrets(run).length === 2 && bindings(run).length === 2 &&
+      environments(run).find((e) => e.name === "Contact__Enabled")?.value === "false" &&
+      !environments(run).some((e) => e.name.startsWith("Contact__") && e.name !== "Contact__Enabled"),
+    `Contact ${stage} default has no Contact secret or startup dependency`);
+  }
+  const prepared = { prepare_secrets: true };
+  let run = plan("prepared disabled", prepared);
+  record(run.status === 0 && secrets(run).length === 6 && bindings(run).length === 6 &&
+    environments(run).find((e) => e.name === "Contact__Enabled")?.value === "false" &&
+    !environments(run).some((e) => e.name.startsWith("Contact__") && e.name !== "Contact__Enabled"),
+  "Contact preparation creates four empty containers/accessor bindings without reading versions");
+  for (const stage of ["dev", "prod"]) {
+    const staged = plan(`isolated ${stage} preparation`, prepared, [`environment=${stage}`]);
+    const contactSecrets = secrets(staged).filter((c) => c.index?.startsWith("contact_"));
+    record(staged.status === 0 && contactSecrets.length === 4 &&
+      contactSecrets.every((c) => c.change.after.secret_id.startsWith(`portfolio-${stage}-contact-`)),
+    `Contact ${stage} preparation has separate stage-owned secret names`);
+  }
+  const active = { ...prepared, enabled: true, provider_reviewed: true,
+    mailbox_cleanup_reviewed: true, delivery_verified: true };
+  run = plan("reviewed synthetic activation", active);
+  const contactEnv = environments(run).filter((e) => e.name.startsWith("Contact__") && e.name !== "Contact__Enabled");
+  record(run.status === 0 && environments(run).find((e) => e.name === "Contact__Enabled")?.value === "true" &&
+    contactEnv.length === 4 && contactEnv.every((e) => !e.value && e.value_source[0]?.secret_key_ref[0]?.version === "latest") &&
+    !run.changes.some((c) => c.type === "google_secret_manager_secret_version" || c.change.actions.includes("delete")),
+  "reviewed Contact activation uses only four secret references, no payload or destructive resource");
+  for (const flag of Object.keys(active)) {
+    run = plan(`missing ${flag}`, { ...active, [flag]: false });
+    if (flag === "enabled") continue;
+    record(run.status !== 0 && /Contact activation requires/.test(run.text), `Contact refuses missing ${flag}`);
+  }
+  run = plan("preparation before service", prepared, ["create_service=false", "container_image="]);
+  record(run.status !== 0 && /Contact preparation requires/.test(run.text), "Contact refuses preparation before the service phase");
+}
+
 function main() {
   for (const dir of [gcpDir, cloudflareDir, ledgerDir]) {
     if (!existsSync(join(dir, ".terraform"))) {
@@ -543,6 +589,7 @@ function main() {
     proveControlLedger(work);
     proveStageWiring(work);
     proveVertexPreparation(work);
+    proveContactPreparation(work);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

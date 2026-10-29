@@ -10,6 +10,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { contactDeploymentViolations } from "./contact-deployment-policy.mjs";
 
 export const CHECKED_FILES = [
   "deployment/gcp/apis.tf",
@@ -18,6 +19,7 @@ export const CHECKED_FILES = [
   "deployment/gcp/variables.tf",
   "deployment/gcp/versions.tf",
   "deployment/gcp/vertex.tf",
+  "deployment/gcp/contact.tf",
   "deployment/gcp/wif.tf",
   "deployment/gcp/terraform.tfvars.example",
   "deployment/cloudflare/main.tf",
@@ -387,13 +389,8 @@ export function checkDeployment(files) {
     fail("secret-state", "deploy steps must not print secrets");
   }
 
-  // 4. Disabled Contact does not need credentials; staged bootstrap ----------------------
-  if (!/name\s*=\s*"Contact__Enabled"\s*\n\s*value\s*=\s*"false"/.test(gcp.main)) {
-    fail("contact-startup", "Contact__Enabled must be explicitly false on the service");
-  }
-  if (/Contact__|contact[-_]api[-_]token|contact_token/i.test(gcp.main.replace(/name\s*=\s*"Contact__Enabled"/, ""))) {
-    fail("contact-startup", "the service must not depend on contact credentials while Contact is disabled");
-  }
+  // 4. Contact is off by default and preparation never requires secret values.
+  for (const violation of contactDeploymentViolations(files)) fail("contact-startup", violation);
   if (/contact/i.test(gcp.outputs)) {
     fail("contact-startup", "no contact secret may be exported or declared");
   }

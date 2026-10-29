@@ -114,7 +114,7 @@ const cases = [
 
   // Disabled Contact and bootstrap
   ["service needs a contact credential", GCP_MAIN, append('resource "google_secret_manager_secret" "c" {\n  secret_id = "contact-api-token"\n}'), "contact-startup"],
-  ["Contact enabled", GCP_MAIN, replace('value = "false"', 'value = "true"'), "contact-startup"],
+  ["Contact enabled without its gate", GCP_MAIN, replace('value = tostring(local.contact_enabled)', 'value = "true"'), "contact-startup"],
   ["service not gated by create_service", GCP_MAIN, replace("count = var.create_service ? 1 : 0", "count = 1"), "bootstrap"],
   ["bootstrap defaults to creating the service", GCP_VARS, replace(/(variable "create_service"[\s\S]*?default\s*=\s*)false/, "$1true"), "bootstrap"],
   ["image defaults to latest", GCP_VARS, replace('default     = ""\n  nullable', 'default     = "r/p/backend:latest"\n  nullable'), "bootstrap"],
@@ -166,7 +166,7 @@ const cases = [
   ["runbook recommends a token in a variable file", RUNBOOK, replace(/CLOUDFLARE_API_TOKEN/g, "TOKEN_VAR"), "plan-secrets"],
 
   // Foundation-to-service transition
-  ["service can be removed silently", GCP_MAIN, replace("prevent_destroy = true", "prevent_destroy = false"), "service-removal"],
+  ["service can be removed silently", GCP_MAIN, replace(/prevent_destroy = true/g, "prevent_destroy = false"), "service-removal"],
   ["deletion protection dropped", GCP_MAIN, replace("deletion_protection = true", "deletion_protection = false"), "service-removal"],
   ["service-phase inputs absent from the example", GCP_TFVARS, replace(/^# create_service\s*=.*$/m, ""), "service-persistence"],
   ["runbook passes transient overrides", RUNBOOK, append("terraform apply -var create_service=true -var container_image=x"), "service-persistence"],
@@ -289,7 +289,10 @@ test("service and revision scaling are recognized independently of block order",
   const files = mutate(GCP_MAIN, (text) => {
     const block = /\n  scaling \{[\s\S]*?\n  \}\n/.exec(text)?.[0];
     assert.ok(block);
-    return text.replace(block, "\n").replace("  lifecycle {", `${block}\n  lifecycle {`);
+    const serviceStart = text.indexOf('resource "google_cloud_run_v2_service" "backend"');
+    assert.ok(serviceStart >= 0);
+    const service = text.slice(serviceStart).replace(block, "\n").replace("  lifecycle {", `${block}\n  lifecycle {`);
+    return text.slice(0, serviceStart) + service;
   });
   assert.deepEqual(checkDeployment(files), []);
 });
