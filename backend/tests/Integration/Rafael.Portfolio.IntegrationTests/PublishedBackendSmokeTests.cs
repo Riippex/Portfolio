@@ -107,7 +107,7 @@ public sealed partial class PublishedBackendSmokeTests
             using var profileEvidenceJson = JsonDocument.Parse(await profileEvidence.Content.ReadAsStringAsync());
             var profileItem = profileEvidenceJson.RootElement.GetProperty("item");
             Assert.Equal("verified", profileItem.GetProperty("evidenceStatus").GetString());
-            Assert.Equal("2026.10.2", profileItem.GetProperty("version").GetString());
+            Assert.Equal("2026.10.3", profileItem.GetProperty("version").GetString());
             Assert.Equal("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", profileItem.GetProperty("sourceUrl").GetString());
             var profileSectionSlugs = profileEvidenceJson.RootElement.GetProperty("sections").EnumerateArray()
                 .Select(section => section.GetProperty("slug").GetString()!).ToArray();
@@ -317,7 +317,7 @@ public sealed partial class PublishedBackendSmokeTests
                 {
                     Assert.Equal("evidence-profile", citation.GetProperty("documentId").GetString());
                     Assert.Equal("verified", citation.GetProperty("evidenceStatus").GetString());
-                    Assert.Equal("2026.10.2", citation.GetProperty("version").GetString());
+                    Assert.Equal("2026.10.3", citation.GetProperty("version").GetString());
                     Assert.Equal("https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz", citation.GetProperty("sourceUrl").GetString());
                 });
                 Assert.Contains(expinnCitations, citation =>

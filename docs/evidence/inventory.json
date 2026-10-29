@@ -1,7 +1,7 @@
 {
   "$schema": "./schema.json",
-  "version": "2026.10.2",
-  "lastUpdated": "2026-10-27",
+  "version": "2026.10.3",
+  "lastUpdated": "2026-10-29",
   "items": [
     {
       "id": "evidence-profile",
@@ -13,7 +13,7 @@
       "focusAreas": [
         "Software engineering",
         "AI engineering",
-        "Cloud fundamentals"
+        "Cloud engineering"
       ],
       "links": [
         {
@@ -25,11 +25,11 @@
           "url": "https://github.com/Riippex"
         }
       ],
-      "version": "2026.10.2",
+      "version": "2026.10.3",
       "evidenceStatus": "verified",
       "sourceUrl": "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz",
       "documentPath": "docs/evidence/profile.md",
-      "lastReviewed": "2026-10-27",
+      "lastReviewed": "2026-10-29",
       "claims": [
         {
           "claimId": "claim-profile-04",

@@ -32,7 +32,7 @@ public sealed class PortfolioCatalogTests
 
         Assert.Contains("Software engineering", profile.FocusAreas);
         Assert.Contains("AI engineering", profile.FocusAreas);
-        Assert.Contains("Cloud fundamentals", profile.FocusAreas);
+        Assert.Contains("Cloud engineering", profile.FocusAreas);
     }
 
     [Fact]

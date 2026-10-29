@@ -3,9 +3,10 @@
 - Identifier: `evidence-profile`
 - Kind: Profile
 - Status: `verified`
-- Version: `2026.10.2`
-- Last reviewed: 2026-10-27
+- Version: `2026.10.3`
+- Last reviewed: 2026-10-29
 - Canonical Source: https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz
+- Owner-selected focus areas: Software engineering, AI engineering, Cloud engineering. These describe professional interests, not additional verified experience or credentials.
 
 ## Summary
 

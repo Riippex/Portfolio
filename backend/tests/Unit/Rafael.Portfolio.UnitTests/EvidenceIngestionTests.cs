@@ -76,8 +76,8 @@ public sealed class EvidenceIngestionTests
         }
 
         // Version and review metadata move together between the document and the manifest.
-        Assert.Equal("2026.10.2", profile.Item.Version);
-        Assert.Equal(new DateOnly(2026, 10, 27), profile.Item.LastReviewed);
+        Assert.Equal("2026.10.3", profile.Item.Version);
+        Assert.Equal(new DateOnly(2026, 10, 29), profile.Item.LastReviewed);
     }
 
     [Fact]

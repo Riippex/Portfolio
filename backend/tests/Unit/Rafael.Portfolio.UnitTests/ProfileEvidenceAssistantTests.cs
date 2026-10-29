@@ -19,7 +19,7 @@ public sealed class ProfileEvidenceAssistantTests
 {
     private const string ProfileSource = "https://co.linkedin.com/in/rafael-pati%C3%B1o-diaz";
     private const string GitHubProfileUrl = "https://github.com/Riippex";
-    private const string ProfileVersion = "2026.10.2";
+    private const string ProfileVersion = "2026.10.3";
 
     // Claim ids that once labelled different, now removed assertions must never come back.
     private static readonly string[] RetiredClaimIds = ["claim-profile-01", "claim-profile-02", "claim-profile-03"];
@@ -278,7 +278,7 @@ public sealed class ProfileEvidenceAssistantTests
         var body = await chat.Content.ReadAsStringAsync();
         Assert.Contains("\"groundingStatus\":\"grounded\"", body);
         Assert.Contains("claim-profile-05", body);
-        Assert.Contains("2026.10.2", body);
+        Assert.Contains("2026.10.3", body);
         Assert.DoesNotContain("claim-profile-02", body);
         Assert.DoesNotContain("Expinn Technology", body);
 
