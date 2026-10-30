@@ -1,0 +1,22 @@
+{
+  "name": "rafael-portfolio-contact",
+  "main": "entry.js",
+  "compatibility_date": "2026-10-29",
+  "observability": { "enabled": false },
+  "env": {
+    "dev": {
+      "name": "rafael-portfolio-contact-dev",
+      "workers_dev": true,
+      "vars": { "PORTFOLIO_STAGE": "dev", "CONTACT_RELAY_ENABLED": "false" },
+      "send_email": [{ "name": "EMAIL" }],
+      "ratelimits": [{ "name": "RELAY_RATE_LIMIT", "namespace_id": "1301", "simple": { "limit": 6, "period": 60 } }]
+    },
+    "prod": {
+      "name": "rafael-portfolio-contact-prod",
+      "workers_dev": true,
+      "vars": { "PORTFOLIO_STAGE": "prod", "CONTACT_RELAY_ENABLED": "false" },
+      "send_email": [{ "name": "EMAIL" }],
+      "ratelimits": [{ "name": "RELAY_RATE_LIMIT", "namespace_id": "1401", "simple": { "limit": 6, "period": 60 } }]
+    }
+  }
+}

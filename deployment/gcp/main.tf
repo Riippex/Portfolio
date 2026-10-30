@@ -198,6 +198,14 @@ resource "google_cloud_run_v2_service" "backend" {
         }
       }
 
+      dynamic "env" {
+        for_each = local.contact_runtime_env
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       env {
         name = "Turnstile__SecretKey"
         value_source {

@@ -7,6 +7,10 @@ The portfolio is a product demonstration, not a static résumé. Its public clai
 - `frontend/`: Next.js application deployed to Cloudflare Workers.
 - `backend/`: .NET 10 modular monolith deployed to Google Cloud Run.
 - `services/`: created only when a process needs an independent runtime, release, or scaling model.
+  The optional `services/contact-email/` Worker is the first such process: a
+  backend-authenticated email provider adapter, independently deployed on
+  Cloudflare. It owns no visitor API, contact business policy or persistence.
+  See [ADR 0003](adr/0003-verified-destination-email-worker.md).
 
 ## Backend boundaries
 

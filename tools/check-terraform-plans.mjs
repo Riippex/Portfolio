@@ -565,6 +565,22 @@ function proveContactPreparation(work) {
     contactEnv.length === 4 && contactEnv.every((e) => !e.value && e.value_source[0]?.secret_key_ref[0]?.version === "latest") &&
     !run.changes.some((c) => c.type === "google_secret_manager_secret_version" || c.change.actions.includes("delete")),
   "reviewed Contact activation uses only four secret references, no payload or destructive resource");
+  for (const stage of ["dev", "prod"]) {
+    const worker = { ...active, relay_mode: "worker",
+      worker_url: `https://rafael-portfolio-contact-${stage}.example.workers.dev/v1/contact-relay/${stage}` };
+    const staged = plan(`reviewed ${stage} Worker activation`, worker, [`environment=${stage}`]);
+    const env = environments(staged);
+    const references = env.filter((e) => e.name.startsWith("Contact__") && e.value_source?.length > 0);
+    record(staged.status === 0 && references.length === 3 && !env.some((e) => e.name === "Contact__AccountId") &&
+      env.find((e) => e.name === "Contact__RelayMode")?.value === "worker" &&
+      env.find((e) => e.name === "Contact__WorkerUrl")?.value === worker.worker_url,
+    `Contact ${stage} Worker needs three secret refs and only its stage-specific endpoint`);
+    const disabled = plan(`${stage} Worker disabled`, { ...worker, enabled: false }, [`environment=${stage}`]);
+    record(disabled.status === 0 && !environments(disabled).some((e) => e.name.startsWith("Contact__") && e.name !== "Contact__Enabled"),
+      `Contact ${stage} disabled Worker has no credential/endpoint startup dependency`);
+    const wrong = plan(`${stage} Worker unsafe endpoint`, { ...worker, worker_url: "https://attacker.example/" }, [`environment=${stage}`]);
+    record(wrong.status !== 0 && /stage-specific HTTPS/.test(wrong.text), `Contact ${stage} Worker rejects arbitrary endpoints`);
+  }
   for (const flag of Object.keys(active)) {
     run = plan(`missing ${flag}`, { ...active, [flag]: false });
     if (flag === "enabled") continue;

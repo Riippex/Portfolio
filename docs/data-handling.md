@@ -43,6 +43,17 @@ model work (see [model control](runbooks/model-control.md)).
 
 ## Product defaults
 
+- The optional Contact Email Routing Worker is a backend-authenticated provider
+  adapter, not a mailbox. Contact fields and plain-text MIME bytes exist only for
+  one bounded request/send; there is no durable message, queue or delivery receipt.
+  It never reads Gmail. Sender/recipient and the distinct stage relay capability
+  are provider secrets, never frontend configuration or Terraform payloads.
+  Its approximate rate-limit binding holds only a fixed stage key and counts,
+  logically bounded by its 60-second admission window; no IP, visitor identifier
+  or contact content. Provider-managed physical retention is separate. Worker
+  payload logging/observability is disabled. Account/provider and recipient mailbox
+  retention still require operator review. See [Contact](runbooks/contact.md).
+
 - Anonymous chat has no durable transcript or cross-session memory.
 - Before external model processing is activated, disclose the provider, purpose,
   fields sent, global processing and applicable standard retention; obtain an

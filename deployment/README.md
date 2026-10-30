@@ -4,6 +4,13 @@ Reproducible Infrastructure-as-Code (Terraform) for the portfolio architecture. 
 
 ## Provider Split
 
+The optional independently deployed email provider Worker is defined in
+`services/contact-email/wrangler.jsonc`, outside the frontend and Terraform zone
+stack. Its manual `Deploy Contact relay` workflow owns its script/configuration;
+operator-reviewed secrets remain out of band. This verified-destination route can
+use Workers Free and does not require an Email Sending subscription. See its
+[operator runbook](../services/contact-email/README.md); runtime quotas still apply.
+
 - `cloudflare/`: zone routing for the frontend only: the stage hostname DNS record and the route to the deployed Worker. It does not manage the Worker script, its variables or secrets, or the Turnstile widget.
 - `control-ledger/`: the one shared Cloud Firestore database for the Assistant's model budget ledger, its TTL policies, stage runtime identities' scoped access and the shared Firestore/Vertex APIs. Gated (`create_database = false`) and applied once for the whole portfolio, never per stage. API enablement does not activate inference or grant predict access.
 - `gcp/`: the Google Cloud Run host for the `.NET 10` modular monolith (`Rafael.Portfolio.Web`), Artifact Registry, empty Secret Manager containers, the required service APIs, Workload Identity Federation, and the runtime and CI service accounts.

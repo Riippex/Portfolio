@@ -32,6 +32,10 @@ import { contactDeploymentViolations } from "./contact-deployment-policy.mjs";
 export const CHECKED_FILES = [
   ".github/workflows/ci.yml",
   ".github/workflows/deploy.yml",
+  ".github/workflows/deploy-contact-relay.yml",
+  "services/contact-email/wrangler.jsonc",
+  "services/contact-email/relay.mjs",
+  "services/contact-email/entry.js",
   "docs/runbooks/release.md",
   "docs/runbooks/contact.md",
   "docs/evidence/inventory.json",
@@ -55,7 +59,7 @@ export const CHECKED_FILES = [
 ];
 
 // Source files scanned for forbidden persistence APIs and fabricated evidence.
-const isSourcePath = (path) => path.startsWith("backend/src/") || path.startsWith("frontend/src/");
+const isSourcePath = (path) => path.startsWith("backend/src/") || path.startsWith("frontend/src/") || path.startsWith("services/contact-email/");
 
 const TEXT_EXTENSIONS = new Set([
   ".md", ".mjs", ".js", ".ts", ".tsx", ".cs", ".csproj", ".json", ".jsonc", ".tf",

@@ -1,0 +1,87 @@
+name: Deploy Contact relay
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment stage
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+      enable_relay:
+        description: Enable authenticated provider sends after owner provider/credential review (does not enable the Contact form)
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contact-relay-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the exact stage and release branch
+        env:
+          TARGET: ${{ inputs.environment }}
+          REF: ${{ github.ref }}
+        run: |
+          case "${TARGET}:${REF}" in
+            dev:refs/heads/develop|prod:refs/heads/main) ;;
+            *) echo "::error::Invalid stage/branch pairing"; exit 1 ;;
+          esac
+
+  validate:
+    needs: authorize
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  deploy:
+    needs: [authorize, validate]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install the existing locked Wrangler toolchain
+        working-directory: frontend
+        run: npm ci
+      - name: Require secret names before enabling sends (no values)
+        if: inputs.enable_relay
+        working-directory: frontend
+        env:
+          TARGET: ${{ inputs.environment }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler secret list --config ../services/contact-email/wrangler.jsonc --env "${TARGET}" > "${RUNNER_TEMP}/contact-secret-names.json"
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const names = JSON.parse(readFileSync(process.env.RUNNER_TEMP + "/contact-secret-names.json", "utf8")).map(s => s.name);
+            for (const name of ["RELAY_TOKEN", "CONTACT_SENDER", "CONTACT_RECIPIENT"])
+              if (!names.includes(name)) throw new Error("Missing required Contact Worker secret name");
+          '
+      - name: Deploy only the reviewed Contact Worker stage
+        working-directory: frontend
+        env:
+          TARGET: ${{ inputs.environment }}
+          ENABLE_RELAY: ${{ inputs.enable_relay }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler deploy --config ../services/contact-email/wrangler.jsonc --env "${TARGET}" \
+            --var "CONTACT_RELAY_ENABLED:${ENABLE_RELAY}"

@@ -129,6 +129,15 @@ jobs:
               --var PORTFOLIO_BACKEND_URL:https://backend.example.test
           done
 
+      - name: Validate the isolated Contact email Worker for both stages
+        working-directory: frontend
+        run: |
+          node --test ../services/contact-email/relay.test.mjs
+          for stage in dev prod; do
+            npx wrangler deploy --config ../services/contact-email/wrangler.jsonc --env "${stage}" \
+              --dry-run --outdir "${RUNNER_TEMP}/contact-worker-${stage}"
+          done
+
   infrastructure:
     name: Infrastructure (Terraform and deployment invariants)
     runs-on: ubuntu-latest

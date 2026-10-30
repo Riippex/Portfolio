@@ -1,7 +1,8 @@
 # Contact relay: contract, configuration, and activation
 
 The Contact module relays a visitor's message to one fixed inbox through the
-Cloudflare Email Service REST API. It is a relay, not a mailbox: the application
+Cloudflare Email Service REST API or an opt-in authenticated Email Routing Worker
+for a verified destination. It is a relay, not a mailbox: the application
 stores nothing. This document is the public contract between the producer (the
 .NET backend) and its consumers (the Next.js proxy and form), the configuration
 reference, and the checklist for a later, owner-authorized activation.
@@ -9,6 +10,44 @@ reference, and the checklist for a later, owner-authorized activation.
 **Status:** implemented and tested against a fake provider only. Real sending is
 disabled by default and has never been run against Cloudflare. Nothing here
 claims live delivery.
+
+## Verified-destination route without an Email Sending subscription
+
+The owner can select `Contact:RelayMode=worker` and the exact stage-specific
+`Contact:WorkerUrl`. The backend keeps all public validation, consent, Turnstile,
+identity and rate-limit controls. An isolated provider adapter under
+`services/contact-email/` calls Cloudflare's native EmailMessage binding to the
+fixed, verified recipient. The Next.js app never accesses this email binding.
+See [ADR 0003](../adr/0003-verified-destination-email-worker.md) and the
+[private transport and operator runbook](../../services/contact-email/README.md).
+
+Cloudflare documents free sends to verified destinations on all plans, including
+accounts configured only for Email Routing. Worker runtime quotas still apply;
+this is not a total invoice cap. Account setup and real delivery remain unverified.
+The existing `rest` mode remains the default for compatibility; the account's
+Email Sending REST entitlement is separate from this verified-destination path.
+
+Worker mode requires SenderEmail/RecipientEmail and a 64-character lowercase hex
+relay capability in `Contact:ApiToken`; no AccountId or Cloudflare account API
+token is used. Worker URL must be HTTPS, with no query, port override, credentials
+or fragment, exactly
+`https://rafael-portfolio-contact-<stage>.<account>.workers.dev/v1/contact-relay/<stage>`.
+The host's explicit stage must match. The HTTP client does not follow redirects.
+Worker failure never bypasses the backend or automatically switches to REST.
+The capability is distinct per stage and from the frontend identity secret.
+
+Provider wire shape and public Contact responses are unchanged. The Worker
+returns queued after one binding acceptance; verify mailbox receipt separately.
+MIME headers use conservative ASCII mailbox syntax; unsupported header syntax
+fails closed as a provider rejection. No visitor text can become MIME headers.
+No retries, payload logs, application storage, Gmail client or cleanup scheduler
+are introduced by this provider adapter. Real mailbox lifecycle remains an
+external, separately verified gate.
+
+Sources checked 2026-10-29:
+[pricing](https://developers.cloudflare.com/email-service/platform/pricing/),
+[bindings](https://developers.cloudflare.com/email-service/configuration/send-bindings/),
+[Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/).
 
 All values below are placeholders. Real addresses, account identifiers, tokens,
 and sender and recipient choices live in private owner context and server
@@ -127,8 +166,9 @@ Frontend (server-side unless noted): `ASSISTANT_PROXY_IDENTITY_SECRET`
 the build), `BACKEND_API_URL` (`<backend-base-url>`), and
 `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (`<turnstile-site-key>`, public by design).
 
-With `Contact:Enabled=true` the host refuses to start unless the account, token,
-sender, and recipient are present and both addresses are valid mailboxes. Never
+With `Contact:Enabled=true` the host refuses to start unless the selected mode's
+settings, token, sender and recipient are valid; AccountId is required in REST
+mode only. Never
 commit values; use secret stores and local, ignored configuration.
 
 ## Testing without sending
@@ -183,7 +223,8 @@ Enabling requires `prepare_secrets`, `provider_reviewed`,
 of completed operator checks, including an authorized direct-provider synthetic
 delivery before first application enablement; they do not perform those checks.
 Then verify the real form end to end separately. Plans must show only the
-intended stage, four secret references and the explicit enable switch. No
+intended stage, four secret references in REST mode or three plus a stage-bound
+endpoint in Worker mode, and the explicit enable switch. No
 version is provisioned and no mail is sent by Terraform. The default release
 and production inputs remain disabled.
 

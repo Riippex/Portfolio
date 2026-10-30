@@ -54,7 +54,9 @@ public sealed class CloudflareEmailRelay : IContactRelay
             return ContactDeliveryResult.Unavailable("Contact service is not enabled or configured.");
         }
 
-        var endpoint = $"https://api.cloudflare.com/client/v4/accounts/{_options.AccountId}/email/sending/send";
+        var endpoint = _options.RelayMode == "worker"
+            ? _options.WorkerUrl!
+            : $"https://api.cloudflare.com/client/v4/accounts/{_options.AccountId}/email/sending/send";
 
         var payload = new CloudflareSendPayload
         {

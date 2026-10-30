@@ -46,6 +46,11 @@ vertex = null
 # containers with secret-scoped runtime access, but no startup references.
 # Populate values out of band; never add token/account/address inputs here.
 contact = null
+# For the reviewed verified-destination Worker route, also set:
+# relay_mode = "worker"
+# worker_url = "https://rafael-portfolio-contact-dev.example.workers.dev/v1/contact-relay/dev"
+# Keep enabled/review flags false until actual operator checks pass. The URL is
+# non-secret; sender, recipient and the distinct relay capability are secret values.
 # contact = {
 #   prepare_secrets = true
 #   enabled = false

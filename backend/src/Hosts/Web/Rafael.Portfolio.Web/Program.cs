@@ -83,9 +83,11 @@ builder.Services.AddSingleton<IJobMatchingService, JobMatchingService>();
 
 var contactOptions = builder.Configuration.GetSection(ContactOptions.SectionName).Get<ContactOptions>() ?? new ContactOptions();
 contactOptions.Validate();
+contactOptions.ValidateStage(portfolioStage.ToString().ToLowerInvariant());
 builder.Services.AddSingleton(contactOptions);
 
-builder.Services.AddHttpClient("cloudflare-email");
+builder.Services.AddHttpClient("cloudflare-email")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
 builder.Logging.AddFilter("System.Net.Http.HttpClient.cloudflare-email", LogLevel.Warning);
 builder.Services.AddSingleton<IContactRelay>(sp =>
     new CloudflareEmailRelay(

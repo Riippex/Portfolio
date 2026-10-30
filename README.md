@@ -8,10 +8,12 @@ An interactive portfolio for an AI systems engineer. The finished product will c
 frontend/    Next.js + TypeScript on Cloudflare Workers
 backend/     .NET 10 modular monolith on Google Cloud Run
 deployment/ Cloudflare and GCP infrastructure
+services/   Independently deployed Contact email provider Worker
 docs/       Architecture and decision records
 ```
 
-Independent deployables will live in a root `services/` directory when the first real service exists.
+The Contact email Worker is an optional provider adapter; the .NET module retains
+all contact business policy. See [ADR 0003](docs/adr/0003-verified-destination-email-worker.md).
 
 ## Local development
 
