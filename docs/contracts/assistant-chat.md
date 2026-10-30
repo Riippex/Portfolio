@@ -61,16 +61,16 @@ CountTokens and generation. Counting is also external processing. Synchronous
 necessary but not sufficient: reviewed provider configuration, safety, evidence,
 budgets and availability must also permit the turn.
 
-**Proposed operator opt-in, off by default:** [ADR 0004](../adr/0004-opt-in-control-client-startup-preparation.md)
-describes dormant `Assistant:ModelControl:PrepareClientOnStart` scaffolding. If
-separately adopted and explicitly enabled for a fully reviewed model/ledger pair,
+**Operator opt-in, off by default:** [ADR 0004](../adr/0004-opt-in-control-client-startup-preparation.md)
+describes `Assistant:ModelControl:PrepareClientOnStart`. When explicitly enabled
+for a fully reviewed model/ledger pair,
 startup may authenticate to the control store and read its one operational root
 before any visitor consent. This is an explicit exception to the default
 credentials lifecycle, not authorization for visitor data processing. It invokes
 no Vertex credential path, counting, generation, reservation or write and retains
 no root snapshot or cached allowance. Request model processing still requires the
-same affirmative choice and fresh admission. The proposal is not accepted and no
-environment activation is implied; leave the option unset pending owner review.
+same affirmative choice and fresh admission. ADR acceptance does not authorize
+environment activation; leave the option unset until the owner approves the target.
 
 The checkbox is optional for free text and suggested questions. Its value lives
 only in component/request memory, resets on reload, and can be unchecked between

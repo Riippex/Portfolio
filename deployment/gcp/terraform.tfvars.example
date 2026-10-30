@@ -67,6 +67,7 @@ contact = null
 #   data_policy_reviewed = false
 #   token_counting_reviewed = false
 #   recovery_ready = false
+#   prepare_client_on_start = false # Optional ADR 0004 startup read; requires all model/predict/review gates above.
 #   tariff = {
 #     version = "replace-with-reviewed-version"
 #     input_micro_usd_per_million = 250000

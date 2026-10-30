@@ -474,7 +474,7 @@ function proveVertexPreparation(work) {
 
   for (const stage of ["dev", "prod"]) {
     const run = plan(`default ${stage}`, null, [`environment=${stage}`]);
-    record(run.status === 0 && predict(run).length === 0 && !Object.keys(env(run)).some((key) => key.startsWith("Assistant__Vertex") || key.includes("__Tariff__")),
+    record(run.status === 0 && predict(run).length === 0 && !Object.keys(env(run)).some((key) => key.startsWith("Assistant__Vertex") || key.includes("__Tariff__") || key.endsWith("__PrepareClientOnStart")),
       `Vertex default leaves ${stage} without model settings, tariff or predict resources`);
   }
   let run = plan("prepared disabled", prepared);
@@ -501,6 +501,27 @@ function proveVertexPreparation(work) {
     data_policy_reviewed: true, token_counting_reviewed: true, recovery_ready: true };
   run = plan("reviewed synthetic activation", activated);
   record(run.status === 0 && env(run).Assistant__Vertex__Enabled === "true", "synthetic fully reviewed activation is representable, plan only");
+  const activeSettings = env(run);
+  record(!Object.hasOwn(settings, "Assistant__ModelControl__PrepareClientOnStart") &&
+    !Object.hasOwn(activeSettings, "Assistant__ModelControl__PrepareClientOnStart"),
+    "omitted startup preparation emits no new environment key for disabled or enabled models");
+  run = plan("startup explicitly false", { ...activated, prepare_client_on_start: false });
+  record(run.status === 0 && JSON.stringify(env(run)) === JSON.stringify(activeSettings),
+    "explicitly false startup preparation preserves the complete omitted-option environment");
+  const startup = { ...activated, prepare_client_on_start: true };
+  run = plan("startup explicitly true", startup);
+  record(run.status === 0 && env(run).Assistant__ModelControl__PrepareClientOnStart === "true" &&
+    !Object.hasOwn(env(run), "Assistant__ModelControl__InitializeStore") && predict(run).length === 2 &&
+    !run.changes.some((c) => c.type.startsWith("google_firestore") || c.change.actions.includes("delete")),
+    "reviewed startup opt-in emits only its true runtime flag without initialization, new database or broader IAM");
+  for (const flag of ["enabled", "grant_predict_access", "data_policy_reviewed", "token_counting_reviewed", "recovery_ready"]) {
+    run = plan(`startup missing ${flag}`, { ...startup, [flag]: false }, [], false);
+    record(run.status !== 0 && /Startup control-client preparation requires/.test(run.text.replace(/\s+/g, " ")),
+      `startup preparation without ${flag} is refused`);
+  }
+  run = plan("startup mismatched ledger", startup, ["control_ledger_project_id=other-project"], false);
+  record(run.status !== 0 && /Vertex requires the shared control ledger/.test(run.text.replace(/\s+/g, " ")),
+    "startup preparation retains the same-project shared-ledger guard");
   for (const flag of ["grant_predict_access", "data_policy_reviewed", "token_counting_reviewed", "recovery_ready"]) {
     run = plan(`missing ${flag}`, { ...activated, [flag]: false }, [], false);
     record(run.status !== 0 && /Enabling Vertex requires explicit predict access/.test(run.text.replace(/\s+/g, " ")),

@@ -1,6 +1,6 @@
 # ADR 0004: Opt-in control-client startup preparation
 
-- Status: Proposed; not accepted or authorized for activation
+- Status: Accepted; environment activation requires separate authorization
 - Date: 2026-10-30
 - Scope: Backend operational lifecycle; the default request lifecycle is unchanged
 
@@ -18,14 +18,14 @@ and generation behind the visitor's affirmative choice. Operational startup
 authentication would be an explicit exception to that literal credentials
 promise. It must not be introduced as an invisible performance optimization.
 
-## Proposed decision
+## Decision
 
 Provide a dormant, off-by-default `Assistant:ModelControl:PrepareClientOnStart`
 option. It requires the exact value `true` and the same fully enabled, reviewed,
 tariff-valid, project-matching Vertex/ledger pair required for model composition.
 Missing, false, differently cased or incomplete settings do not prepare a client.
-This implementation is reviewable scaffolding; accepting this ADR and authorizing
-an environment's configuration are separate owner decisions.
+Accepting this ADR and authorizing an environment's configuration are separate
+owner decisions. The option remains off by default.
 
 When explicitly adopted and enabled, before the Web host starts serving requests:
 
@@ -69,9 +69,9 @@ unchanged. It does not reset any request clock or demonstrate production readine
   later requests or hide subsequent policy changes/corruption.
 - Operational logs contain bounded outcomes and duration only, without credential
   contents, root fields, prompts, responses, visitor identifiers or exception text.
-- No deployment, Terraform, environment flag or cloud permission changes form part
-  of this proposal. Keep the option unset until owner adoption and environment
-  authorization; a live synthetic model test still requires its separate bound.
+- This decision does not deploy, apply Terraform, activate an environment or change
+  cloud permissions. Keep the option unset until the owner authorizes the target
+  environment; a live synthetic model test still requires its separate bound.
 
 ## Sources checked
 

@@ -54,11 +54,14 @@ test("the real definitions satisfy every invariant", () => {
 const cases = [
   // Optional Vertex preparation must not activate or broaden runtime access.
   ["Vertex loses its null default", GCP_VERTEX, replace('default = null', 'default = {}'), "vertex-config"],
-  ["Vertex settings emitted without a gate", GCP_VERTEX, replace('vertex_env = var.vertex == null ? {} : {', 'vertex_env = {'), "vertex-config"],
+  ["Vertex settings emitted without a gate", GCP_VERTEX, replace('vertex_env = merge(var.vertex == null ? {} : {', 'vertex_env = merge({'), "vertex-config"],
   ["Vertex environment disconnected", GCP_MAIN, replace('for_each = local.vertex_env', 'for_each = {}'), "vertex-config"],
-  ...["enabled", "grant_predict_access", "data_policy_reviewed", "token_counting_reviewed", "recovery_ready"].map((flag) =>
+  ...["enabled", "grant_predict_access", "data_policy_reviewed", "token_counting_reviewed", "recovery_ready", "prepare_client_on_start"].map((flag) =>
     [`Vertex ${flag} defaults on`, GCP_VERTEX, replace(new RegExp(`(${flag}\\s*=\\s*optional\\(bool, )false`), '$1true'), "vertex-config"]),
   ["Vertex enablement loses reviews", GCP_VERTEX, replace('!var.vertex.enabled || (', 'true || ('), "vertex-config"],
+  ["Vertex startup preparation loses activation gates", GCP_VERTEX, replace('!var.vertex.prepare_client_on_start || (', 'true || ('), "vertex-config"],
+  ["Vertex startup preparation emitted by default", GCP_VERTEX, replace('try(var.vertex.prepare_client_on_start, false) ? {', 'true ? {'), "vertex-config"],
+  ["Vertex startup preparation loses its exact runtime flag", GCP_VERTEX, replace(/("Assistant__ModelControl__PrepareClientOnStart"\s*=\s*)"true"/, '$1"false"'), "vertex-config"],
   ["Vertex enabled literal", GCP_VERTEX, replace('tostring(var.vertex.enabled)', '"true"'), "vertex-config"],
   ["Vertex cross-project runtime", GCP_VERTEX, replace(/("Assistant__Vertex__ProjectId"\s*=\s*)var.project_id/, '$1"other-project"'), "vertex-config"],
   ["Vertex model changed", GCP_VERTEX, replace('"gemini-3.1-flash-lite"', '"another-model"'), "vertex-config"],

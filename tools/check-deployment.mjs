@@ -777,14 +777,18 @@ export function checkDeployment(files) {
   // Optional provider wiring: absent by default, with independent IAM and model gates.
   const vertexVariable = hclBlock(gcp.vertex, /variable\s+"vertex"/) ?? "";
   if (!/default\s*=\s*null/.test(vertexVariable) ||
-      !/vertex_env\s*=\s*var\.vertex == null \? \{\} : \{/.test(gcp.vertex) ||
+      !/vertex_env\s*=\s*merge\(var\.vertex == null \? \{\} : \{/.test(gcp.vertex) ||
       !/for_each\s*=\s*local\.vertex_env/.test(container)) {
     fail("vertex-config", "Vertex must default to null and emit settings only through its gated container environment");
   }
-  for (const flag of ["enabled", "grant_predict_access", "data_policy_reviewed", "token_counting_reviewed", "recovery_ready"]) {
+  for (const flag of ["enabled", "grant_predict_access", "data_policy_reviewed", "token_counting_reviewed", "recovery_ready", "prepare_client_on_start"]) {
     if (!new RegExp(`\\b${flag}\\s*=\\s*optional\\(bool, false\\)`).test(vertexVariable)) {
       fail("vertex-config", `Vertex ${flag} must default to false`);
     }
+  }
+  if (!/!var\.vertex\.prepare_client_on_start \|\| \(\s*var\.vertex\.enabled && var\.vertex\.grant_predict_access && var\.vertex\.data_policy_reviewed &&\s*var\.vertex\.token_counting_reviewed && var\.vertex\.recovery_ready/.test(vertexVariable) ||
+      !/try\(var\.vertex\.prepare_client_on_start, false\) \? \{\s*"Assistant__ModelControl__PrepareClientOnStart"\s*=\s*"true"\s*\} : \{\}\)/.test(gcp.vertex)) {
+    fail("vertex-config", "Startup control-client preparation must require explicit enablement/reviews and emit its environment key only when opted in");
   }
   if (!/!var\.vertex\.enabled \|\| \(/.test(vertexVariable) ||
       !/var\.vertex\.grant_predict_access && var\.vertex\.data_policy_reviewed &&\s*var\.vertex\.token_counting_reviewed && var\.vertex\.recovery_ready/.test(vertexVariable) ||

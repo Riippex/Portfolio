@@ -9,6 +9,7 @@ variable "vertex" {
     data_policy_reviewed    = optional(bool, false)
     token_counting_reviewed = optional(bool, false)
     recovery_ready          = optional(bool, false)
+    prepare_client_on_start = optional(bool, false)
     tariff = object({
       version                      = string
       input_micro_usd_per_million  = number
@@ -41,11 +42,19 @@ variable "vertex" {
     ))
     error_message = "Enabling Vertex requires explicit predict access and completed data-policy, token-counting and recovery reviews. These flags are attestations, not a substitute for verification."
   }
+
+  validation {
+    condition = var.vertex == null ? true : (!var.vertex.prepare_client_on_start || (
+      var.vertex.enabled && var.vertex.grant_predict_access && var.vertex.data_policy_reviewed &&
+      var.vertex.token_counting_reviewed && var.vertex.recovery_ready
+    ))
+    error_message = "Startup control-client preparation requires the enabled model, explicit predict access and completed data-policy, token-counting and recovery reviews."
+  }
 }
 
 locals {
   vertex_predict_access = try(var.vertex.grant_predict_access, false)
-  vertex_env = var.vertex == null ? {} : {
+  vertex_env = merge(var.vertex == null ? {} : {
     "Assistant__Vertex__Enabled"                                      = tostring(var.vertex.enabled)
     "Assistant__Vertex__ProjectId"                                    = var.project_id
     "Assistant__Vertex__Location"                                     = var.vertex.location
@@ -57,7 +66,10 @@ locals {
     "Assistant__ModelControl__Tariff__InputMicroUsdPerMillionTokens"  = tostring(var.vertex.tariff.input_micro_usd_per_million)
     "Assistant__ModelControl__Tariff__OutputMicroUsdPerMillionTokens" = tostring(var.vertex.tariff.output_micro_usd_per_million)
     "Assistant__ModelControl__Tariff__ValidThroughUtc"                = var.vertex.tariff.valid_through_utc
-  }
+    }, try(var.vertex.prepare_client_on_start, false) ? {
+    # Accepted ADR 0004; absent/false emits no key and preserves the strict default lifecycle.
+    "Assistant__ModelControl__PrepareClientOnStart" = "true"
+  } : {})
 }
 
 # Project-scoped single-permission role: NOT a per-model IAM restriction. The
