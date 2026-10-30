@@ -21,7 +21,7 @@ internal static class ModelProviderComposition
         services.AddSingleton<IVertexAccessToken, VertexAccessToken>();
         services.AddSingleton(sp => new VertexGeminiClient(options, policy,
             new VertexTransport(sp.GetRequiredService<IHttpClientFactory>().CreateClient("vertex-model"), sp.GetRequiredService<IVertexAccessToken>()),
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(), sp.GetService<ILogger<VertexGeminiClient>>()));
         services.AddSingleton<IModelProvider>(sp => configured ? sp.GetRequiredService<VertexGeminiClient>() : new DisabledModelProvider());
         services.AddSingleton<IModelRequestTokenCounter>(sp => configured ? sp.GetRequiredService<VertexGeminiClient>() : new UnverifiedModelRequestTokenCounter());
     }

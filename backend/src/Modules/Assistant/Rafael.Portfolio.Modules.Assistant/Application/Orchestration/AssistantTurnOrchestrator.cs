@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Rafael.Portfolio.Modules.Assistant.Domain;
 
 namespace Rafael.Portfolio.Modules.Assistant.Application.Orchestration;
@@ -6,7 +7,7 @@ namespace Rafael.Portfolio.Modules.Assistant.Application.Orchestration;
 /// <summary>One sequential provider call, whole approved claims only, and P2 fail-closed accounting.
 /// All provider implementations remain disabled in production composition.</summary>
 public sealed class AssistantTurnOrchestrator(IModelProvider provider, IModelRequestTokenCounter counter,
-    IModelControlLedger ledger, TimeProvider clock) : IAssistantTurnOrchestrator
+    IModelControlLedger ledger, TimeProvider clock, ILogger<AssistantTurnOrchestrator>? logger = null) : IAssistantTurnOrchestrator
 {
     private readonly OrphanGuard _orphans = new();
 
@@ -27,7 +28,10 @@ public sealed class AssistantTurnOrchestrator(IModelProvider provider, IModelReq
             ReservationId: id);
         var budgets = new TurnBudgets(clock, turnStart, _orphans);
         var preEnd = TimeSpan.FromSeconds(3);
+        var phaseStart = budgets.Elapsed;
         var reservation = await budgets.AwaitAsync(ct => ledger.TryReserveAsync(id, ct), preEnd, cancellationToken);
+        Report("Reserve", !reservation.Known ? reservation.Failure.ToString()
+            : reservation.Value?.Success == true ? "Accepted" : ReservationDenial(reservation.Value?.DenialReason), phaseStart);
         if (!reservation.Known || reservation.Value?.Success != true)
         {
             if (!reservation.Known || reservation.Value?.DenialReason == ModelReservationDenialReason.StoreUnavailable)
@@ -35,14 +39,21 @@ public sealed class AssistantTurnOrchestrator(IModelProvider provider, IModelReq
             return null;
         }
 
+        phaseStart = budgets.Elapsed;
         var count = await budgets.AwaitAsync(ct => counter.CountAsync(request, ct), preEnd, cancellationToken);
+        Report("Count", !count.Known ? count.Failure.ToString()
+            : count.Value is { Basis: ModelTokenCountBasis.ProviderVerifiedUpperBound, InputTokens: > 0 and <= 6000 }
+                ? "Verified" : "Unverified", phaseStart);
         if (!count.Known || count.Value is not { Basis: ModelTokenCountBasis.ProviderVerifiedUpperBound, InputTokens: > 0 and <= 6000 })
         {
             await new TurnAccounting(ledger, budgets, id, budgets.EpilogueEnd).CancelAsync();
             return null;
         }
+        phaseStart = budgets.Elapsed;
         var begin = await budgets.AwaitAsync(ct => ledger.TryBeginCallAsync(id, count.Value.InputTokens, request.MaxOutputTokens, ct),
             preEnd, cancellationToken);
+        Report("Begin", !begin.Known ? begin.Failure.ToString()
+            : begin.Value?.Allowed == true ? "Accepted" : CallDenial(begin.Value?.DenialReason), phaseStart);
         if (!begin.Known || begin.Value?.Allowed != true || budgets.Elapsed >= preEnd || cancellationToken.IsCancellationRequested)
         {
             await new TurnAccounting(ledger, budgets, id, budgets.EpilogueEnd).CancelAsync();
@@ -74,5 +85,22 @@ public sealed class AssistantTurnOrchestrator(IModelProvider provider, IModelReq
         // is accounted for even when output, status, or the model's claim selection is invalid.
         if (!confirmed || selected is null || cancellationToken.IsCancellationRequested) return null;
         return ApprovedClaimCatalog.Render(selected, offered);
+
+        void Report(string phase, string outcome, TimeSpan phaseStarted)
+        {
+            // Fixed codes and timings only: never pass a question, response, token, address,
+            // exception, or other caller/provider-controlled value into diagnostics.
+            try
+            {
+                logger?.LogInformation("ModelPreparation: Phase={Phase}, Outcome={Outcome}, PhaseMs={PhaseMs}, ElapsedMs={ElapsedMs}",
+                    phase, outcome, (budgets.Elapsed - phaseStarted).TotalMilliseconds, budgets.Elapsed.TotalMilliseconds);
+            }
+            catch (Exception) { /* Observability must not alter dispatch or accounting. */ }
+        }
     }
+
+    private static string ReservationDenial(ModelReservationDenialReason? reason) =>
+        reason is { } value && Enum.IsDefined(value) ? value.ToString() : "UnknownDenial";
+    private static string CallDenial(ModelCallDenialReason? reason) =>
+        reason is { } value && Enum.IsDefined(value) ? value.ToString() : "UnknownDenial";
 }

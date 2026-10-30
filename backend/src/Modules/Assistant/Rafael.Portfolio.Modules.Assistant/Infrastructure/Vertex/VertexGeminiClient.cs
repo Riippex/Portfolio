@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 using Rafael.Portfolio.Modules.Assistant.Application;
 
 namespace Rafael.Portfolio.Modules.Assistant.Infrastructure;
@@ -9,7 +10,7 @@ namespace Rafael.Portfolio.Modules.Assistant.Infrastructure;
 /// <summary>Text-only REST adapter. Counting and inference use one canonical input body.
 /// No SDK automatic retries, external tools, cache creation or model-written visitor prose.</summary>
 public sealed class VertexGeminiClient(VertexModelOptions options, ModelControlPolicy policy,
-    VertexTransport transport, TimeProvider clock) : IModelProvider, IModelRequestTokenCounter
+    VertexTransport transport, TimeProvider clock, ILogger<VertexGeminiClient>? logger = null) : IModelProvider, IModelRequestTokenCounter
 {
     private sealed class CountReceipt(string body, int count)
     {
@@ -26,7 +27,18 @@ public sealed class VertexGeminiClient(VertexModelOptions options, ModelControlP
 
     public async ValueTask<ModelRequestTokenCount> CountAsync(ModelProviderRequest request, CancellationToken cancellationToken = default)
     {
-        if (!IsAvailable) return Unverified;
+        var started = clock.GetTimestamp();
+        ModelRequestTokenCount Deny(string code) { Report(code); return Unverified; }
+        void Report(string code)
+        {
+            try
+            {
+                logger?.LogInformation("ModelTokenCount: Outcome={Outcome}, DurationMs={DurationMs}",
+                    code, clock.GetElapsedTime(started).TotalMilliseconds);
+            }
+            catch (Exception) { /* Logging cannot change the counting contract. */ }
+        }
+        if (!IsAvailable) return Deny("Unavailable");
         _counts.Remove(request);
         try
         {
@@ -34,17 +46,23 @@ public sealed class VertexGeminiClient(VertexModelOptions options, ModelControlP
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             budget.CancelAfter(TimeSpan.FromSeconds(2));
             using var response = await transport.SendAsync(options.Endpoint("countTokens"), body, budget.Token);
-            if (response is null || !Integer(response.RootElement, "totalTokens", out var count) || count is < 1 or > 6000)
-                return Unverified;
+            if (response is null) return Deny("ResponseUnavailable");
+            if (!Integer(response.RootElement, "totalTokens", out var count)) return Deny("SchemaRejected");
+            if (count is < 1 or > 6000) return Deny("CountOutOfRange");
             // No media estimates: require an exact TEXT-only modality breakdown matching total.
             if (!response.RootElement.TryGetProperty("promptTokensDetails", out var details)
                 || details.ValueKind != JsonValueKind.Array || details.GetArrayLength() != 1
-                || !details[0].TryGetProperty("modality", out var modality) || modality.GetString() != "TEXT"
-                || !Integer(details[0], "tokenCount", out var textCount) || textCount != count) return Unverified;
+                || details[0].ValueKind != JsonValueKind.Object
+                || !details[0].TryGetProperty("modality", out var modality)
+                || modality.ValueKind != JsonValueKind.String || modality.GetString() != "TEXT"
+                || !Integer(details[0], "tokenCount", out var textCount) || textCount != count) return Deny("TextBreakdownRejected");
             _counts.AddOrUpdate(request, new CountReceipt(body, count));
+            Report("Verified");
             return new(count, ModelTokenCountBasis.ProviderVerifiedUpperBound);
         }
-        catch (Exception) { return Unverified; }
+        catch (OperationCanceledException) { return Deny(cancellationToken.IsCancellationRequested ? "CallerCancelled" : "Deadline"); }
+        catch (JsonException) { return Deny("SchemaRejected"); }
+        catch (Exception) { return Deny("ProviderFault"); }
     }
 
     public async ValueTask<ModelProviderResponse> GenerateAsync(ModelProviderRequest request, CancellationToken cancellationToken = default)

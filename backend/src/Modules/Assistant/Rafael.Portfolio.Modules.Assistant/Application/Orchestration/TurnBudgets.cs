@@ -1,6 +1,7 @@
 namespace Rafael.Portfolio.Modules.Assistant.Application.Orchestration;
 
-internal readonly record struct PortResult<T>(bool Known, T Value);
+internal enum PortFailure { None, Deadline, CallerCancelled, Fault }
+internal readonly record struct PortResult<T>(bool Known, T Value, PortFailure Failure = PortFailure.None);
 
 // Deny-only, process-local backpressure. This is NOT a replacement for global ledger permits.
 internal sealed class OrphanGuard
@@ -31,7 +32,8 @@ internal sealed class TurnBudgets(TimeProvider clock, long start, OrphanGuard or
         TimeSpan end, CancellationToken caller = default)
     {
         var remaining = end - Elapsed;
-        if (remaining <= TimeSpan.Zero || caller.IsCancellationRequested) return default;
+        if (remaining <= TimeSpan.Zero || caller.IsCancellationRequested)
+            return new(false, default!, caller.IsCancellationRequested ? PortFailure.CallerCancelled : PortFailure.Deadline);
         using var phase = CancellationTokenSource.CreateLinkedTokenSource(caller);
         // The clock-aware delay bounds the wait even when the port ignores cancellation.
         var deadline = Task.Delay(remaining, clock, phase.Token);
@@ -43,11 +45,15 @@ internal sealed class TurnBudgets(TimeProvider clock, long start, OrphanGuard or
             if (winner != task || caller.IsCancellationRequested || Elapsed >= end)
             {
                 orphans.Observe(task);
-                return default;
+                return new(false, default!, caller.IsCancellationRequested ? PortFailure.CallerCancelled : PortFailure.Deadline);
             }
             return new PortResult<T>(true, await task.ConfigureAwait(false));
         }
-        catch (Exception) { return default; }
+        catch (Exception)
+        {
+            return new(false, default!, caller.IsCancellationRequested ? PortFailure.CallerCancelled
+                : Elapsed >= end ? PortFailure.Deadline : PortFailure.Fault);
+        }
         finally
         {
             // Cancel the operation as a courtesy and clear the timer on early completion.
