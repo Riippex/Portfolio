@@ -4,6 +4,8 @@ using static Rafael.Portfolio.Modules.Assistant.Infrastructure.FirestoreDocument
 
 namespace Rafael.Portfolio.Modules.Assistant.Infrastructure;
 
+public enum ModelClientPreparationOutcome { NotRequested, Ready, MissingRoot, InvalidState, PolicyMismatch, InvalidPolicy, Unavailable, TimedOut }
+
 /// <summary>
 /// The backend-owned control ledger on Cloud Firestore. Every operation is one bounded
 /// transaction: it reads the control document, the reservation and the period counters it
@@ -28,8 +30,11 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger, IModelCon
 
     /// <summary>Upper bound for one ledger operation, retries included. A store that does not answer in time denies.</summary>
     public static readonly TimeSpan DefaultOperationTimeout = TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan ClientPreparationTimeout = TimeSpan.FromSeconds(5);
 
     private readonly Lazy<FirestoreDb> _lazyDb;
+    private readonly Lazy<Task<ModelClientPreparationOutcome>>? _startupPreparation;
+    private FirestoreDb? _preparedClient;
     private readonly ModelControlPolicy _policy;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _operationTimeout;
@@ -67,7 +72,70 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger, IModelCon
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    private FirestoreDb _db => _lazyDb.Value;
+    /// <summary>Opt-in operational startup preparation. Until its one read succeeds, this
+    /// variant denies store access; failed preparation never falls back to creating a client
+    /// on a visitor request. The ordinary lazy constructor retains the default lifecycle.</summary>
+    public FirestoreModelControlLedger(
+        Func<CancellationToken, Task<FirestoreDb>> startupClientFactory,
+        ModelControlPolicy policy,
+        TimeProvider? timeProvider = null)
+        : this(new Lazy<FirestoreDb>(() => throw new InvalidOperationException("Control client is not prepared.")), policy, timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(startupClientFactory);
+        _startupPreparation = new(() => PrepareOnceAsync(startupClientFactory));
+    }
+
+    public Task<ModelClientPreparationOutcome> PrepareClientAsync() =>
+        _startupPreparation?.Value ?? Task.FromResult(ModelClientPreparationOutcome.NotRequested);
+
+    private async Task<ModelClientPreparationOutcome> PrepareOnceAsync(Func<CancellationToken, Task<FirestoreDb>> factory)
+    {
+        var started = _timeProvider.GetTimestamp();
+        if (!_policy.TryValidate(_timeProvider.GetUtcNow(), out _)) return ModelClientPreparationOutcome.InvalidPolicy;
+        using var budget = new CancellationTokenSource(ClientPreparationTimeout, _timeProvider);
+        var token = budget.Token;
+        void CheckDeadline()
+        {
+            token.ThrowIfCancellationRequested();
+            if (_timeProvider.GetElapsedTime(started) >= ClientPreparationTimeout) throw new OperationCanceledException();
+        }
+        // One queued task also bounds a factory's synchronous prefix. It has no continuation
+        // that can publish a client or grant work after the startup wait has expired.
+        var work = Task.Run(async () =>
+        {
+            CheckDeadline();
+            var client = await factory(token).ConfigureAwait(false);
+            CheckDeadline(); // No late build may chain a root read, even if the timer callback is delayed.
+            var snapshot = await client.Collection(ControlCollection).Document(ControlDocument).GetSnapshotAsync(token).ConfigureAwait(false);
+            CheckDeadline();
+            if (!snapshot.Exists) return (ModelClientPreparationOutcome.MissingRoot, (FirestoreDb?)null);
+            var root = ParseRoot(snapshot.ToDictionary());
+            if (!ModelControlAccounting.IsSane(root) || root.Epoch == long.MaxValue)
+                return (ModelClientPreparationOutcome.InvalidState, (FirestoreDb?)null);
+            if (!string.Equals(root.PolicyVersion, _policy.Version, StringComparison.Ordinal))
+                return (ModelClientPreparationOutcome.PolicyMismatch, (FirestoreDb?)null);
+            return (ModelClientPreparationOutcome.Ready, (FirestoreDb?)client);
+        });
+        try
+        {
+            var result = await work.WaitAsync(token).ConfigureAwait(false);
+            CheckDeadline();
+            if (result.Item1 == ModelClientPreparationOutcome.Ready) Volatile.Write(ref _preparedClient, result.Item2);
+            return result.Item1;
+        }
+        catch (OperationCanceledException) { _ = ObserveAsync(work); return ModelClientPreparationOutcome.TimedOut; }
+        catch (StoredStateInvalidException) { return ModelClientPreparationOutcome.InvalidState; }
+        catch (Exception) { return ModelClientPreparationOutcome.Unavailable; }
+    }
+
+    private static async Task ObserveAsync(Task task)
+    {
+        try { await task.ConfigureAwait(false); }
+        catch (Exception) { /* Observe late failures without logging provider or credential data. */ }
+    }
+
+    private FirestoreDb _db => _startupPreparation is null ? _lazyDb.Value
+        : Volatile.Read(ref _preparedClient) ?? throw new InvalidOperationException("Control client is not prepared.");
 
     private CancellationTokenSource Bounded(CancellationToken callerToken)
     {

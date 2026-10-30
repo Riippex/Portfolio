@@ -112,6 +112,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapHealthChecks("/health");
 
+await ModelControlComposition.PrepareClientIfRequestedAsync(app.Services, app.Configuration);
 await ModelControlComposition.InitializeStoreIfRequestedAsync(app.Services, app.Configuration);
 
 var v1 = app.MapGroup("/v1");

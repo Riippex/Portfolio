@@ -162,12 +162,27 @@ Google Cloud, global processing, standard retention, data sent and purpose;
 privacy details name the operator/contact and explain withdrawal and no
 application transcript/consent storage. Contact consent remains separate.
 
-`AssistantService` checks current affirmative consent before the entire
+With default configuration, `AssistantService` checks current affirmative consent before the entire
 orchestrator in async JSON and SSE, so credentials, reservations, **CountTokens**
 and generation are unreachable without it. The host's strict optional-field
 converter denies malformed choices rather than coercing them. Missing, refused
 or stale choices retain deterministic chat and normal security checks. A client
 checkbox, operator flag, Turnstile or allowlist membership alone cannot grant it.
+
+The off-by-default startup control-client proposal in [ADR 0004](../adr/0004-opt-in-control-client-startup-preparation.md)
+is **not accepted or authorized for activation**. Its dormant setting is
+`Assistant:ModelControl:PrepareClientOnStart`, exact `true`; it additionally
+requires the same enabled/reviewed, tariff-valid, project-matching provider pair.
+If separately adopted, it permits one five-second operational Firestore client
+preparation/root-read invocation before serving requests (existing SDK transient
+retries share that bound). It authenticates to the control store before visitor
+consent, explicitly changing the default credentials lifecycle; it never calls
+the Vertex credential path, CountTokens or generation, or writes ledger state.
+Only the client is reused. Failure leaves that process's opt-in store unavailable
+and deterministic fallback intact; late tasks cannot publish readiness. No
+per-request warmup, deadline reset, retry loop, new allowance, infrastructure
+setting or activation authorization is introduced. Keep this flag unset until
+the owner accepts the proposal and authorizes the target environment separately.
 
 The choice remains in component/request memory, resets on reload and can be
 withdrawn for subsequent submissions, not recalled from already dispatched

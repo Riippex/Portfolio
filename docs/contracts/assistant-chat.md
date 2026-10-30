@@ -54,12 +54,23 @@ grant model processing.
 
 ## Enforcement and lifecycle
 
-The Assistant application service checks the choice before entering orchestration
+With default configuration, the Assistant application service checks the choice before entering orchestration
 in both async chat and SSE. This precedes credentials, ledger reservations,
 CountTokens and generation. Counting is also external processing. Synchronous
 `Chat` remains deterministic even with valid consent. An accepted choice is
 necessary but not sufficient: reviewed provider configuration, safety, evidence,
 budgets and availability must also permit the turn.
+
+**Proposed operator opt-in, off by default:** [ADR 0004](../adr/0004-opt-in-control-client-startup-preparation.md)
+describes dormant `Assistant:ModelControl:PrepareClientOnStart` scaffolding. If
+separately adopted and explicitly enabled for a fully reviewed model/ledger pair,
+startup may authenticate to the control store and read its one operational root
+before any visitor consent. This is an explicit exception to the default
+credentials lifecycle, not authorization for visitor data processing. It invokes
+no Vertex credential path, counting, generation, reservation or write and retains
+no root snapshot or cached allowance. Request model processing still requires the
+same affirmative choice and fresh admission. The proposal is not accepted and no
+environment activation is implied; leave the option unset pending owner review.
 
 The checkbox is optional for free text and suggested questions. Its value lives
 only in component/request memory, resets on reload, and can be unchecked between

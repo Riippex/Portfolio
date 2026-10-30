@@ -39,7 +39,8 @@ internal static class ModelControlComposition
         return new ModelTariff(section["Version"]!, section["ModelId"]!, input, output, validThrough);
     }
 
-    public static IModelControlLedger CreateLedger(IConfiguration configuration, TimeProvider timeProvider)
+    public static IModelControlLedger CreateLedger(IConfiguration configuration, TimeProvider timeProvider,
+        Func<CancellationToken, Task<FirestoreDb>>? startupClientFactory = null)
     {
         var projectId = configuration[$"{SectionName}:Firestore:ProjectId"];
         var databaseId = configuration[$"{SectionName}:Firestore:DatabaseId"];
@@ -48,6 +49,13 @@ internal static class ModelControlComposition
             return new UnavailableModelControlLedger();
         }
 
+        if (PreparationRequested(configuration, timeProvider))
+            return new FirestoreModelControlLedger(startupClientFactory ?? (ct => new FirestoreDbBuilder
+            {
+                ProjectId = projectId,
+                DatabaseId = databaseId
+            }.BuildAsync(ct)), BuildPolicy(configuration), timeProvider);
+
         var client = new Lazy<FirestoreDb>(() => new FirestoreDbBuilder
         {
             ProjectId = projectId,
@@ -55,6 +63,26 @@ internal static class ModelControlComposition
         }.Build());
 
         return new FirestoreModelControlLedger(client, BuildPolicy(configuration), timeProvider);
+    }
+
+    internal static bool PreparationRequested(IConfiguration configuration, TimeProvider timeProvider) =>
+        string.Equals(configuration[$"{SectionName}:PrepareClientOnStart"], "true", StringComparison.Ordinal)
+        && ModelProviderComposition.IsFullyConfigured(configuration, timeProvider.GetUtcNow());
+
+    public static async Task PrepareClientIfRequestedAsync(IServiceProvider services, IConfiguration configuration)
+    {
+        var clock = services.GetRequiredService<TimeProvider>();
+        if (!PreparationRequested(configuration, clock)
+            || services.GetRequiredService<IModelControlLedger>() is not FirestoreModelControlLedger ledger) return;
+        var started = clock.GetTimestamp();
+        var outcome = await ledger.PrepareClientAsync();
+        try
+        {
+            services.GetRequiredService<ILoggerFactory>().CreateLogger("Rafael.Portfolio.ModelControl")
+                .LogInformation("ModelControl startup preparation: Outcome={Outcome}, DurationMs={DurationMs}",
+                    outcome, clock.GetElapsedTime(started).TotalMilliseconds);
+        }
+        catch (Exception) { /* Diagnostics must not prevent deterministic host startup. */ }
     }
 
     /// <summary>

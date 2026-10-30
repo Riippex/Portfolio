@@ -19,26 +19,29 @@ public sealed class FirestorePreparationBatchTests
     private const string Id = "res_batch_0001";
     private static readonly DateTimeOffset Now = ModelControlFixtures.Noon;
 
-    private sealed class Rpc : FirestoreClient
+    internal sealed class Rpc(bool allowNonTransactional = false) : FirestoreClient
     {
         private readonly FirestoreSettings _settings = FirestoreSettings.GetDefault();
         public override FirestoreSettings Settings => _settings;
         internal Dictionary<string, Document> Documents { get; } = [];
         internal List<string[]> Reads { get; } = [];
         internal List<CommitRequest> Commits { get; } = [];
+        internal int Begins { get; private set; }
         internal Action? BeforeRead { get; set; }
         private static ProtoTimestamp Time => ProtoTimestamp.FromDateTimeOffset(Now);
 
         public override Task<BeginTransactionResponse> BeginTransactionAsync(BeginTransactionRequest request, CallSettings? callSettings = null)
         {
             callSettings?.CancellationToken?.ThrowIfCancellationRequested();
+            Begins++;
             return Task.FromResult(new BeginTransactionResponse { Transaction = ByteString.CopyFromUtf8("test-transaction") });
         }
 
         public override BatchGetDocumentsStream BatchGetDocuments(BatchGetDocumentsRequest request, CallSettings? callSettings = null)
         {
             callSettings?.CancellationToken?.ThrowIfCancellationRequested();
-            Assert.Equal("test-transaction", request.Transaction.ToStringUtf8());
+            if (!allowNonTransactional || request.Transaction.Length != 0)
+                Assert.Equal("test-transaction", request.Transaction.ToStringUtf8());
             Reads.Add(request.Documents.ToArray());
             BeforeRead?.Invoke();
             // The wire API is explicitly unordered. Exercise the high-level SDK's
