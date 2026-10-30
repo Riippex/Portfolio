@@ -39,6 +39,26 @@ test("one accepted message preserves MIME isolation and reports queued only", as
   assert.equal(Buffer.from(encoded.replaceAll("\r\n", ""), "base64").toString("utf8"), body.text);
 });
 
+test("MIME has one current RFC 5322 Date that visitor text cannot override", async () => {
+  const { env, sent } = fixture();
+  const body = { ...payload, text: "Date: Fri, 01 Jan 1999 00:00:00 +0000\r\nA visitor supplied this old date." };
+  const before = Math.floor(Date.now() / 1000) * 1000;
+  const response = await relay(request(body), env, createMessage);
+  const after = Date.now();
+  assert.equal(response.status, 200);
+  assert.equal(sent.length, 1);
+  const [headers, encoded] = sent[0].raw.split("\r\n\r\n");
+  const dates = headers.split("\r\n").filter((line) => /^Date:/i.test(line));
+  assert.equal(dates.length, 1);
+  const value = dates[0].slice("Date: ".length);
+  assert.match(value, /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} \+0000$/);
+  const timestamp = Date.parse(value);
+  assert.ok(Number.isFinite(timestamp));
+  assert.ok(timestamp >= before && timestamp <= after);
+  assert.equal(new Date(timestamp).toUTCString().replace(/GMT$/, "+0000"), value);
+  assert.equal(Buffer.from(encoded.replaceAll("\r\n", ""), "base64").toString("utf8"), body.text);
+});
+
 for (const [name, overrides, modify, status] of [
   ["disabled", { CONTACT_RELAY_ENABLED: "false" }, {}, 503],
   ["missing stage", { PORTFOLIO_STAGE: undefined }, {}, 503],

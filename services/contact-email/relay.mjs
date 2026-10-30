@@ -48,6 +48,8 @@ function mime(payload) {
   // Visitor text lives only in a base64-encoded UTF-8 body, never raw MIME headers.
   const encoded = btoa(String.fromCharCode(...encoder.encode(payload.text)));
   return [
+    // RFC 5322 requires an origination date, generated here rather than from visitor input.
+    `Date: ${new Date().toUTCString().replace(/GMT$/, "+0000")}`,
     `From: ${payload.from}`, `To: ${payload.to}`, `Reply-To: ${payload.reply_to}`,
     `Subject: ${SUBJECT}`, "MIME-Version: 1.0", 'Content-Type: text/plain; charset="utf-8"',
     "Content-Transfer-Encoding: base64", "", encoded.match(/.{1,76}/g).join("\r\n"), "",
