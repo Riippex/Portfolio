@@ -47,6 +47,18 @@ This is acceptance, not proof of inbox receipt. Failures return bounded fixed
 codes with HTTP 4xx/5xx. Provider details, credentials, recipient and message are
 never returned in an unauthenticated response or written to logs.
 
+An authenticated, validated request whose email binding fails still returns
+exactly HTTP 502 and `{"error":"provider_error"}`. Only that protected failure
+response adds `X-Portfolio-Relay-Outcome`: one fixed category from
+`sender_unverified`, `recipient_not_allowed`, `sender_unavailable`, `rate_limited`,
+`delivery_failed`, `provider_unavailable`, or `unknown`. These categories map only
+exact documented Cloudflare `error.code` values; no exception message, arbitrary
+code, address or provider body is reflected. Legacy errors without a recognized
+code remain `unknown`. Pre-send rejections and successful replies have no such
+header. The .NET adapter ignores it, preserving the public Contact API. This is
+bounded internal transport metadata, not a delivery receipt or permission to
+retry. See Cloudflare's [error codes](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/#error-codes).
+
 All responses use `Cache-Control: no-store`. No mailbox access or application
 persistence. The binding with only a name is restricted by Cloudflare to verified
 destinations in the account; the adapter further fixes one configured recipient.

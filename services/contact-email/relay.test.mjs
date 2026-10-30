@@ -29,6 +29,7 @@ test("one accepted message preserves MIME isolation and reports queued only", as
   const body = { ...payload, text: "Hello café\r\nBcc: injected@example.org" };
   const response = await relay(request(body), env, createMessage);
   assert.equal(response.status, 200);
+  assert.equal(response.headers.get("X-Portfolio-Relay-Outcome"), null);
   assert.equal(response.headers.get("Cache-Control"), "no-store");
   assert.deepEqual(await response.json(), { success: true, result: { queued: [payload.to] } });
   assert.equal(sent.length, 1);
@@ -84,6 +85,7 @@ for (const [name, overrides, modify, status] of [
     const { env, sent } = fixture(overrides);
     const response = await relay(request(payload, modify), env, createMessage);
     assert.equal(response.status, status);
+    assert.equal(response.headers.get("X-Portfolio-Relay-Outcome"), null);
     assert.equal(sent.length, 0);
     assert.ok(!(await response.text()).includes("sensitive"));
   });
@@ -111,9 +113,53 @@ test("provider exception is opaque and never retried", async () => {
   const { env } = fixture({ EMAIL: { send: async () => { calls++; throw Error("private provider body"); } } });
   const response = await relay(request(), env, createMessage);
   assert.equal(response.status, 502);
+  assert.equal(response.headers.get("X-Portfolio-Relay-Outcome"), "unknown");
   assert.ok(!(await response.text()).includes("private"));
   assert.equal(calls, 1);
 });
+
+for (const [code, outcome] of [
+  ["E_SENDER_NOT_VERIFIED", "sender_unverified"],
+  ["E_RECIPIENT_NOT_ALLOWED", "recipient_not_allowed"],
+  ["E_SENDER_DOMAIN_NOT_AVAILABLE", "sender_unavailable"],
+  ["E_RATE_LIMIT_EXCEEDED", "rate_limited"],
+  ["E_DAILY_LIMIT_EXCEEDED", "rate_limited"],
+  ["E_DELIVERY_FAILED", "delivery_failed"],
+  ["E_INTERNAL_SERVER_ERROR", "provider_unavailable"],
+]) {
+  test(`documented ${code} exposes only a protected fixed category`, async () => {
+    let calls = 0;
+    const { env } = fixture({ EMAIL: { send: async () => {
+      calls++;
+      throw Object.assign(Error("private provider message owner@example.net token-value"), { code });
+    } } });
+    const response = await relay(request(), env, createMessage);
+    assert.equal(response.status, 502);
+    assert.equal(await response.text(), '{"error":"provider_error"}');
+    assert.equal(response.headers.get("Cache-Control"), "no-store");
+    assert.equal(response.headers.get("X-Portfolio-Relay-Outcome"), outcome);
+    assert.equal(calls, 1);
+  });
+}
+
+for (const error of [
+  null, "private provider message", {},
+  { code: "owner@example.net private-token" },
+  { code: "E_DELIVERY_FAILED\r\nX-Private: owner@example.net" },
+  { code: "e_delivery_failed" }, { code: new String("E_DELIVERY_FAILED") },
+  { code: 123 }, { code: { toString() { throw Error("private value"); } } },
+  { get code() { throw Error("private getter value"); } },
+]) {
+  test("unknown or forged provider codes cannot leak through headers or body", async () => {
+    let calls = 0;
+    const { env } = fixture({ EMAIL: { send: async () => { calls++; throw error; } } });
+    const response = await relay(request(), env, createMessage);
+    assert.equal(response.status, 502);
+    assert.equal(await response.text(), '{"error":"provider_error"}');
+    assert.equal(response.headers.get("X-Portfolio-Relay-Outcome"), "unknown");
+    assert.equal(calls, 1);
+  });
+}
 test("an aborted caller does not start a send", async () => {
   const { env, sent } = fixture();
   const controller = new AbortController();

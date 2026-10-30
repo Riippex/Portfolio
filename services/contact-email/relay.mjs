@@ -56,6 +56,23 @@ function mime(payload) {
   ].join("\r\n");
 }
 
+function providerOutcome(error) {
+  // Only documented exact codes become fixed protected transport metadata.
+  // Legacy errors without codes stay unknown; never inspect provider messages.
+  try {
+    switch (error?.code) {
+      case "E_SENDER_NOT_VERIFIED": return "sender_unverified";
+      case "E_RECIPIENT_NOT_ALLOWED": return "recipient_not_allowed";
+      case "E_SENDER_DOMAIN_NOT_AVAILABLE": return "sender_unavailable";
+      case "E_RATE_LIMIT_EXCEEDED":
+      case "E_DAILY_LIMIT_EXCEEDED": return "rate_limited";
+      case "E_DELIVERY_FAILED": return "delivery_failed";
+      case "E_INTERNAL_SERVER_ERROR": return "provider_unavailable";
+      default: return "unknown";
+    }
+  } catch { return "unknown"; }
+}
+
 export async function relay(request, env, createMessage) {
   const url = new URL(request.url);
   if (!["dev", "prod"].includes(env.PORTFOLIO_STAGE) || env.CONTACT_RELAY_ENABLED !== "true")
@@ -93,5 +110,10 @@ export async function relay(request, env, createMessage) {
     return Response.json({ success: true, result: { queued: [env.CONTACT_RECIPIENT] } }, {
       headers: { "Cache-Control": "no-store" },
     });
-  } catch { return reply(502, "provider_error"); }
+  } catch (error) {
+    return Response.json({ error: "provider_error" }, {
+      status: 502,
+      headers: { "Cache-Control": "no-store", "X-Portfolio-Relay-Outcome": providerOutcome(error) },
+    });
+  }
 }
