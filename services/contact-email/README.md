@@ -61,6 +61,14 @@ requires develop/dev or main/prod pairing, and uses the existing owner environme
 approval gate. It deploys only this Worker, with sends off by default. No account
 plan, DNS record, token or secret value is changed by source validation.
 
+The workflow reads only the stage environment secret `CLOUDFLARE_CONTACT_API_TOKEN`,
+separate from the frontend's credential. Bootstrap the disabled Worker once with
+the owner's explicitly authorized session: per-Worker Editor cannot create a
+resource. Then provision an expiring Individual Workers Editor token restricted
+to this exact Worker for ongoing CI deployments. No account-wide CI Admin or
+frontend token expansion is required. Token creation and storage in the matching
+GitHub environment need explicit owner authorization; do not publish values.
+
 After reviewed owner authorization, deploy disabled, verify the recipient in
 Email Routing, and set the three Worker secrets out of band. The sending domain
 must meet Cloudflare's verified-domain requirements; inspect exact DNS impact

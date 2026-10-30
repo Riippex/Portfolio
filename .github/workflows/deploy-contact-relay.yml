@@ -65,7 +65,7 @@ jobs:
         working-directory: frontend
         env:
           TARGET: ${{ inputs.environment }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_CONTACT_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npx wrangler secret list --config ../services/contact-email/wrangler.jsonc --env "${TARGET}" > "${RUNNER_TEMP}/contact-secret-names.json"
@@ -80,7 +80,7 @@ jobs:
         env:
           TARGET: ${{ inputs.environment }}
           ENABLE_RELAY: ${{ inputs.enable_relay }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_CONTACT_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npx wrangler deploy --config ../services/contact-email/wrangler.jsonc --env "${TARGET}" \

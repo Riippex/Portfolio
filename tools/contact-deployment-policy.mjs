@@ -63,7 +63,8 @@ export function contactDeploymentViolations(files) {
       !workflow.includes("uses: ./.github/workflows/ci.yml") ||
       !workflow.includes("environment: ${{ inputs.environment }}") ||
       !workflow.includes("ref: ${{ github.sha }}") || !workflow.includes("if: inputs.enable_relay") ||
-      /secrets\.(?!CLOUDFLARE_API_TOKEN\b)|id-token:\s*write/.test(workflow)) {
+      !workflow.includes("secrets.CLOUDFLARE_CONTACT_API_TOKEN") ||
+      /secrets\.(?!CLOUDFLARE_CONTACT_API_TOKEN\b)|id-token:\s*write/.test(workflow)) {
     failures.push("Contact Worker release must be manual, branch/stage paired, exact-source validated, owner gated and disabled by default");
   }
   const host = files["backend/src/Hosts/Web/Rafael.Portfolio.Web/Program.cs"] ?? "";

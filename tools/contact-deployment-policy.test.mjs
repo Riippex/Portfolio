@@ -29,6 +29,7 @@ for (const [name, path, before, after] of [
   ["Worker finite limit removed", workerPath, '"limit": 6', '"limit": 600000'],
   ["Worker secret baked in", workerPath, '"PORTFOLIO_STAGE": "dev"', '"RELAY_TOKEN": "synthetic", "PORTFOLIO_STAGE": "dev"'],
   ["release without owner gate", workflowPath, "environment: ${{ inputs.environment }}", "environment: ignored"],
+  ["release reuses frontend credential", workflowPath, "secrets.CLOUDFLARE_CONTACT_API_TOKEN", "secrets.CLOUDFLARE_API_TOKEN"],
   ["release without validation", workflowPath, "needs: [authorize, validate]", "needs: authorize"],
   ["release from wrong branch", workflowPath, "dev:refs/heads/develop|prod:refs/heads/main", "dev:refs/heads/main|prod:refs/heads/develop"],
   ["host follows redirects", hostPath, "AllowAutoRedirect = false", "AllowAutoRedirect = true"],
