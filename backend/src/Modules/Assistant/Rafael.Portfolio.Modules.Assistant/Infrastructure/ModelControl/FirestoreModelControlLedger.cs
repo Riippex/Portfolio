@@ -210,10 +210,16 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger, IModelCon
                 var dayKey = ModelControlPeriods.DayKey(now);
                 var monthKey = ModelControlPeriods.MonthKey(now);
 
-                var root = await ReadRootAsync(tx, cancellationToken);
-                var day = await ReadCounterAsync(tx, DayRef(dayKey), "day", cancellationToken);
-                var month = await ReadCounterAsync(tx, MonthRef(monthKey), "month", cancellationToken);
-                var existing = await ReadReservationAsync(tx, reservationId, cancellationToken);
+                // Independent reads share one transactional BatchGet RPC. Four sequential
+                // round trips unnecessarily consume the unchanged preparation deadline.
+                var snapshots = await tx.GetAllSnapshotsAsync(
+                    [RootRef, DayRef(dayKey), MonthRef(monthKey), ReservationRef(reservationId)], cancellationToken);
+                // The high-level SDK returns snapshots in reference order, including missing
+                // documents; the wire stream itself is unordered and must not be indexed.
+                var root = snapshots[0].Exists ? ParseRoot(snapshots[0].ToDictionary()) : null;
+                var day = snapshots[1].Exists ? ParseCounter(snapshots[1].ToDictionary(), "day") : null;
+                var month = snapshots[2].Exists ? ParseCounter(snapshots[2].ToDictionary(), "month") : null;
+                var existing = snapshots[3].Exists ? ParseReservation(snapshots[3].Id, snapshots[3].ToDictionary()) : null;
 
                 var holders = new Dictionary<string, ReservationRecord?>(StringComparer.Ordinal);
                 if (root is not null && ModelControlAccounting.IsSane(root))
@@ -272,8 +278,9 @@ public sealed class FirestoreModelControlLedger : IModelControlLedger, IModelCon
             return await _db.RunTransactionAsync(async tx =>
             {
                 var now = _timeProvider.GetUtcNow();
-                var root = await ReadRootAsync(tx, cancellationToken);
-                var record = await ReadReservationAsync(tx, reservationId, cancellationToken);
+                var snapshots = await tx.GetAllSnapshotsAsync([RootRef, ReservationRef(reservationId)], cancellationToken);
+                var root = snapshots[0].Exists ? ParseRoot(snapshots[0].ToDictionary()) : null;
+                var record = snapshots[1].Exists ? ParseReservation(snapshots[1].Id, snapshots[1].ToDictionary()) : null;
 
                 var decision = ModelControlAccounting.BeginCall(
                     _policy, now, reservationId, root, record, estimatedInputTokens, maxOutputTokens);
