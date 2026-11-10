@@ -1,7 +1,7 @@
 {
   "$schema": "./schema.json",
-  "version": "2026.10.3",
-  "lastUpdated": "2026-10-29",
+  "version": "2026.11.1",
+  "lastUpdated": "2026-11-05",
   "items": [
     {
       "id": "evidence-profile",
@@ -74,18 +74,30 @@
       "slug": "vextis",
       "kind": "project",
       "title": "Vextis",
-      "summary": "Verified architecture and outcomes will be published here.",
-      "version": "2026.09",
-      "evidenceStatus": "pending",
-      "sourceUrl": null,
+      "summary": "An agent-assisted ERP prototype that takes a purchase order PDF through stock checks, human approval, and invoicing. A Java core controls business writes while a separate Python runtime coordinates the agents.",
+      "version": "2026.11.1",
+      "evidenceStatus": "verified",
+      "sourceUrl": "https://github.com/Riippex/Vextis-ERP/tree/009f107ad0e11c9b05eb72139e52da54c1deb33f",
       "documentPath": "docs/evidence/projects/vextis.md",
-      "lastReviewed": "2026-09-28",
+      "lastReviewed": "2026-11-05",
       "claims": [
         {
           "claimId": "claim-vextis-01",
-          "statement": "Multi-tenant autonomous agent architecture with sandboxed memory and allowlisted retrieval.",
-          "status": "pending",
+          "statement": "Vextis separates the Java Spring Boot enterprise core, which owns CRM, inventory, and billing writes, from a Python Gemini agent runtime that acts through bounded tools.",
+          "status": "verified",
           "citation": "docs/evidence/projects/vextis.md#architecture"
+        },
+        {
+          "claimId": "claim-vextis-02",
+          "statement": "The documented order-to-cash demo extracts purchase order details from a PDF, checks and reserves stock, and pauses for human approval before issuing an invoice.",
+          "status": "verified",
+          "citation": "docs/evidence/projects/vextis.md#purchase-order-workflow"
+        },
+        {
+          "claimId": "claim-vextis-03",
+          "statement": "The Angular Mission Control interface shows agent activity and an audit trail for the demonstrated ERP workflow.",
+          "status": "verified",
+          "citation": "docs/evidence/projects/vextis.md#mission-control"
         }
       ]
     },
@@ -94,18 +106,30 @@
       "slug": "kinetiq-v",
       "kind": "project",
       "title": "Kinetiq V",
-      "summary": "Verified architecture and outcomes will be published here.",
-      "version": "2026.09",
-      "evidenceStatus": "pending",
-      "sourceUrl": null,
+      "summary": "A workout platform with phone-based target enrollment and a separate computer vision engine for tracking a selected person and analyzing exercise movement.",
+      "version": "2026.11.1",
+      "evidenceStatus": "verified",
+      "sourceUrl": "https://github.com/Riippex/kinetiq-v/tree/59f28549049c4dacbf1f713df58757a37489ef3b",
       "documentPath": "docs/evidence/projects/kinetiq-v.md",
-      "lastReviewed": "2026-09-28",
+      "lastReviewed": "2026-11-05",
       "claims": [
         {
           "claimId": "claim-kinetiq-v-01",
-          "statement": "Real-time computer vision processing pipeline with transient TTL state and edge-to-cloud coordination.",
-          "status": "pending",
+          "statement": "The separate OpenCV 5 computer vision engine implements session-specific person tracking and temporal exercise analysis behind versioned REST contracts.",
+          "status": "verified",
           "citation": "docs/evidence/projects/kinetiq-v.md#pipeline"
+        },
+        {
+          "claimId": "claim-kinetiq-v-02",
+          "statement": "A Django GraphQL backend owns routines and workout session state and integrates with the separate vision service.",
+          "status": "verified",
+          "citation": "docs/evidence/projects/kinetiq-v.md#workout-platform"
+        },
+        {
+          "claimId": "claim-kinetiq-v-03",
+          "statement": "The phone asks the athlete to select and confirm a detected person before their movement can affect the workout session.",
+          "status": "verified",
+          "citation": "docs/evidence/projects/kinetiq-v.md#target-enrollment"
         }
       ]
     },
@@ -114,18 +138,30 @@
       "slug": "jobty",
       "kind": "project",
       "title": "JobTY",
-      "summary": "Verified architecture and outcomes will be published here.",
-      "version": "2026.09",
-      "evidenceStatus": "pending",
-      "sourceUrl": null,
+      "summary": "A job-search assistant prototype that reads PDF résumés and evaluates vacancies against a candidate profile, returning a fit score with reasons, concerns, and a recommendation.",
+      "version": "2026.11.1",
+      "evidenceStatus": "verified",
+      "sourceUrl": "https://github.com/Riippex/JobTY/tree/bd85d00826944bebb10dfbe95a702a08d8e84bb1",
       "documentPath": "docs/evidence/projects/jobty.md",
-      "lastReviewed": "2026-09-28",
+      "lastReviewed": "2026-11-05",
       "claims": [
         {
           "claimId": "claim-jobty-01",
-          "statement": "AI vacancy evaluation engine that identifies explicit skill evidence, inferences, and gaps.",
-          "status": "pending",
+          "statement": "JobTY uses an LLM to evaluate a vacancy against a parsed candidate profile and returns a structured fit score, reasons, concerns, and a recommendation.",
+          "status": "verified",
           "citation": "docs/evidence/projects/jobty.md#matching-engine"
+        },
+        {
+          "claimId": "claim-jobty-02",
+          "statement": "The backend extracts text from a PDF résumé and passes it to a configured LLM to produce a structured candidate profile.",
+          "status": "verified",
+          "citation": "docs/evidence/projects/jobty.md#pdf-parsing"
+        },
+        {
+          "claimId": "claim-jobty-03",
+          "statement": "The development snapshot defines a Next.js frontend and a FastAPI backend in Docker Compose, with SQLite configured as the default database.",
+          "status": "verified",
+          "citation": "docs/evidence/projects/jobty.md#application-architecture"
         }
       ]
     }

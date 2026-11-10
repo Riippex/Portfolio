@@ -3,7 +3,9 @@ import { ContactForm } from "@/modules/contact/components/contact-form";
 import { JobMatcher } from "@/modules/job-matching/components/job-matcher";
 import { getProfile, getSelectedProjects } from "@/modules/portfolio/api";
 import { ProfileLinks } from "@/modules/portfolio/components/profile-links";
+import { getProjectPresentation } from "@/modules/portfolio/project-presentation";
 import { BrandMark } from "@/shared/brand/brand-mark";
+import Image from "next/image";
 import Link from "next/link";
 
 export default async function Home() {
@@ -71,26 +73,33 @@ export default async function Home() {
       <section id="work" className="shell section">
         <div className="section-heading">
           <div><span className="kicker">Selected systems</span><h2>Proof over promises.</h2></div>
-          <p>Case studies will be generated only from verified repository and résumé evidence.</p>
+          <p>Explore how each system works, with case studies backed by public source code.</p>
         </div>
         <div className="project-grid">
           {projects && projects.length > 0 ? (
-            projects.map((project, index) => (
-              <Link
-                href={`/projects/${project.slug}`}
-                className="project-card"
-                key={project.slug}
-                aria-label={`View evidence-backed case study for ${project.name}`}
-              >
-                <div className="project-number">0{index + 1}</div>
-                <div>
-                  <span className="project-state">Evidence {project.evidenceStatus}</span>
-                  <h3>{project.name}</h3>
-                  <p>{project.summary}</p>
-                </div>
-                <span className="project-arrow" aria-hidden="true">↗</span>
-              </Link>
-            ))
+            projects.map((project, index) => {
+              const presentation = getProjectPresentation(project.slug);
+
+              return (
+                <Link
+                  href={`/projects/${project.slug}`}
+                  className="project-card"
+                  key={project.slug}
+                  aria-label={`View evidence-backed case study for ${project.name}`}
+                >
+                  <div className="project-number">0{index + 1}</div>
+                  <div className="project-card-copy">
+                    <span className="project-state">Evidence {project.evidenceStatus}</span>
+                    <h3>{project.name}</h3>
+                    <p>{project.summary}</p>
+                  </div>
+                  {presentation && (
+                    <Image className="project-card-cover" src={presentation.cover} width={960} height={420} alt="" unoptimized />
+                  )}
+                  <span className="project-arrow" aria-hidden="true">↗</span>
+                </Link>
+              );
+            })
           ) : (
             <div className="status-banner" role="status" aria-live="polite">
               <strong>Projects catalog unavailable</strong>

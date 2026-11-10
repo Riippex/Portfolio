@@ -3,28 +3,31 @@
 - Identifier: `evidence-project-vextis`
 - Slug: `vextis`
 - Kind: Project
-- Status: `pending`
-- Version: `2026.09`
-- Last reviewed: 2026-09-28
-- Public Source: Pending owner publication
-
-## Status notice
-
-> [!NOTE]
-> Public evidence connection is currently pending. Architecture summaries and case
-> studies will be verified and published once authorized public artifacts are linked.
+- Status: `verified`
+- Version: `2026.11.1`
+- Last reviewed: 2026-11-05
+- Canonical Source: https://github.com/Riippex/Vextis-ERP/tree/009f107ad0e11c9b05eb72139e52da54c1deb33f
 
 ## Architecture
 
-Vextis is an autonomous agent architecture designed around:
+Vextis separates the Java Spring Boot enterprise core, which owns CRM, inventory, and billing writes, from a Python Gemini agent runtime that acts through bounded tools.
 
-- Allowlisted memory and tenant-isolated execution.
-- Pseudonymous scoping and explicit purge semantics.
-- Sandboxed tool invocations preventing privilege escalation.
-- Verifiable audit logs for model-directed actions.
+The core enforces business rules and owns the transactional data. The agent runtime plans and invokes tools across that boundary, while the Angular application presents the workflow to operators.
 
-## Claims index
+[Repository architecture](https://github.com/Riippex/Vextis-ERP/blob/009f107ad0e11c9b05eb72139e52da54c1deb33f/README.md)
 
-| Claim ID | Statement | Status | Citation |
-|---|---|---|---|
-| `claim-vextis-01` | Multi-tenant autonomous agent architecture with sandboxed memory and allowlisted retrieval. | `pending` | Architecture synopsis |
+## Purchase order workflow
+
+The documented order-to-cash demo extracts purchase order details from a PDF, checks and reserves stock, and pauses for human approval before issuing an invoice.
+
+The workflow coordinates CRM, inventory, and billing operations. The public submission documents the flow and the repository demo guide identifies the operator steps and approval checkpoint.
+
+[Order-to-cash demo guide](https://github.com/Riippex/Vextis-ERP/blob/009f107ad0e11c9b05eb72139e52da54c1deb33f/docs/DEMO_SCRIPT.md) · [Hackathon submission](https://devpost.com/software/vextis-erp)
+
+## Mission Control
+
+The Angular Mission Control interface shows agent activity and an audit trail for the demonstrated ERP workflow.
+
+The demo shows operational status, approval decisions, and audit records so an operator can follow what the agents did during the purchase order flow.
+
+[Mission Control demo guide](https://github.com/Riippex/Vextis-ERP/blob/009f107ad0e11c9b05eb72139e52da54c1deb33f/docs/DEMO_SCRIPT.md)

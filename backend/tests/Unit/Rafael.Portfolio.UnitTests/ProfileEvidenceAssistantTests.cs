@@ -66,7 +66,7 @@ public sealed class ProfileEvidenceAssistantTests
     [InlineData("Does Rafael have studies at Universidad Manuela Beltran?", "Studies", "claim-profile-04", "in progress")]
     [InlineData("Tell me about the AI Engineer role at Expinn", "Experience", "claim-profile-05", "announces an AI Engineer role at Expinn")]
     [InlineData("What is StaffHub in Rafael's profile?", "Experience", "claim-profile-06", "lists StaffHub in its experience section")]
-    [InlineData("What are the OCI and ONE training references?", "Training", "claim-profile-07", "OCI (Oracle Cloud Infrastructure) and ONE (Oracle Next Education)")]
+    [InlineData("What are the OCI and ONE training references in Rafael Patiño's profile?", "Training", "claim-profile-07", "OCI (Oracle Cloud Infrastructure) and ONE (Oracle Next Education)")]
     [InlineData("What is Rafael's LinkedIn?", "Links", "claim-profile-08", ProfileSource)]
     [InlineData("Where can I find Rafael's GitHub?", "Links", "claim-profile-09", GitHubProfileUrl)]
     public async Task Supported_profile_questions_are_answered_from_the_external_source_with_fresh_claim_ids(
@@ -114,16 +114,16 @@ public sealed class ProfileEvidenceAssistantTests
     [InlineData("Zero cross-session transcript retention guarantees")]
     [InlineData("Serverless runtime boundaries")]
     [InlineData("Prompt systems and tooling")]
-    public async Task Removed_claims_are_not_documented_in_chat_and_sse(string message)
+    public async Task Removed_profile_claims_are_not_documented_in_scoped_chat_and_sse(string message)
     {
         await using var host = CreateHost();
         var service = host.Services.GetRequiredService<IAssistantService>();
 
-        var response = service.Chat(new AssistantChatRequest(message));
+        var response = service.Chat(new AssistantChatRequest(message, "profile"));
         Assert.Equal(AssistantGroundingStatus.NotDocumented, response.GroundingStatus);
         Assert.Empty(response.Citations);
 
-        var events = await StreamAsync(service, message);
+        var events = await StreamAsync(service, message, "profile");
         Assert.Equal(AssistantGroundingStatus.NotDocumented, events[0].GroundingStatus);
         Assert.DoesNotContain(events, e => e.Citation is not null);
     }
@@ -147,43 +147,42 @@ public sealed class ProfileEvidenceAssistantTests
     }
 
     [Theory]
-    [InlineData("Tell me about Vextis AI engineering")]
-    [InlineData("Tell me about Kinetiq V AI engineering")]
-    [InlineData("What AI engineering did Rafael do in kinetiq-v?")]
-    [InlineData("Explain the JobTY AI engineering vacancy matching")]
-    [InlineData("vextis")]
-    public async Task A_named_pending_project_is_not_answered_with_unrelated_profile_evidence(string message)
+    [InlineData("Explain the Vextis Spring Boot architecture", "vextis", "claim-vextis-01")]
+    [InlineData("How does the Kinetiq V OpenCV pipeline track a person?", "kinetiq-v", "claim-kinetiq-v-01")]
+    [InlineData("How does JobTY score a vacancy against a candidate profile?", "jobty", "claim-jobty-01")]
+    public async Task A_named_project_is_answered_with_its_own_verified_evidence(string message, string slug, string claimId)
     {
         await using var host = CreateHost();
         var service = host.Services.GetRequiredService<IAssistantService>();
 
         var response = service.Chat(new AssistantChatRequest(message));
-        Assert.Equal(AssistantGroundingStatus.NotDocumented, response.GroundingStatus);
-        Assert.Empty(response.Citations);
+        Assert.Equal(AssistantGroundingStatus.Grounded, response.GroundingStatus);
+        Assert.All(response.Citations, citation => Assert.Equal($"evidence-project-{slug}", citation.DocumentId));
+        Assert.Contains(response.Citations, citation => citation.Claims.Contains(claimId));
 
         var events = await StreamAsync(service, message);
-        Assert.Equal(AssistantGroundingStatus.NotDocumented, events[0].GroundingStatus);
-        Assert.DoesNotContain(events, e => e.Citation is not null);
+        Assert.Equal(AssistantGroundingStatus.Grounded, events[0].GroundingStatus);
+        Assert.Contains(events, e => e.Citation?.Claims.Contains(claimId) == true);
         Assert.True(events[^1].Done);
     }
 
     [Fact]
-    public async Task A_pending_project_slug_filter_stays_undocumented_even_with_profile_words()
+    public async Task A_project_slug_filter_excludes_profile_evidence()
     {
         await using var host = CreateHost();
         var service = host.Services.GetRequiredService<IAssistantService>();
 
-        var response = service.Chat(new AssistantChatRequest("Tell me about Vextis AI engineering", "vextis"));
+        var response = service.Chat(new AssistantChatRequest("Explain the Spring Boot architecture and Rafael's AI engineering", "vextis"));
 
-        Assert.Equal(AssistantGroundingStatus.NotDocumented, response.GroundingStatus);
-        Assert.Empty(response.Citations);
+        Assert.Equal(AssistantGroundingStatus.Grounded, response.GroundingStatus);
+        Assert.All(response.Citations, citation => Assert.Equal("evidence-project-vextis", citation.DocumentId));
     }
 
     [Theory]
     [InlineData("Tell me about Vextis AI engineering")]
     [InlineData("Tell me about Kinetiq V AI engineering")]
     [InlineData("Explain the JobTY AI engineering vacancy matching")]
-    public async Task The_profile_filter_does_not_hide_a_named_pending_project(string message)
+    public async Task The_profile_filter_excludes_named_projects(string message)
     {
         await using var host = CreateHost();
         var service = host.Services.GetRequiredService<IAssistantService>();
@@ -203,7 +202,7 @@ public sealed class ProfileEvidenceAssistantTests
     [InlineData("Tell me about Vextis AI engineering")]
     [InlineData("Tell me about Kinetiq V AI engineering")]
     [InlineData("Explain the JobTY AI engineering vacancy matching")]
-    public async Task The_profile_filter_does_not_hide_a_named_pending_project_over_http_chat_and_sse(string message)
+    public async Task The_profile_filter_excludes_named_projects_over_http_chat_and_sse(string message)
     {
         await using var host = CreateHost();
         using var client = host.CreateClient();
@@ -268,7 +267,7 @@ public sealed class ProfileEvidenceAssistantTests
     }
 
     [Fact]
-    public async Task The_running_host_serves_the_curated_profile_and_the_pending_answer_over_chat_and_sse()
+    public async Task The_running_host_serves_the_curated_profile_and_project_over_chat_and_sse()
     {
         await using var host = CreateHost();
         using var client = host.CreateClient();
@@ -282,19 +281,22 @@ public sealed class ProfileEvidenceAssistantTests
         Assert.DoesNotContain("claim-profile-02", body);
         Assert.DoesNotContain("Expinn Technology", body);
 
-        using var pending = await client.PostAsJsonAsync("/v1/assistant/chat", new { message = "Tell me about Vextis AI engineering" });
-        Assert.Equal(HttpStatusCode.OK, pending.StatusCode);
-        var pendingBody = await pending.Content.ReadAsStringAsync();
-        Assert.Contains("\"groundingStatus\":\"not_documented\"", pendingBody);
-        Assert.Contains("\"citations\":[]", pendingBody);
+        const string projectQuestion = "Explain the Vextis Spring Boot architecture";
+        using var project = await client.PostAsJsonAsync("/v1/assistant/chat", new { message = projectQuestion });
+        Assert.Equal(HttpStatusCode.OK, project.StatusCode);
+        var projectBody = await project.Content.ReadAsStringAsync();
+        Assert.Contains("\"groundingStatus\":\"grounded\"", projectBody);
+        Assert.Contains("claim-vextis-01", projectBody);
+        Assert.DoesNotContain("claim-profile-", projectBody);
 
-        using var stream = await client.PostAsJsonAsync("/v1/assistant/chat/stream", new { message = "Tell me about Vextis AI engineering" });
+        using var stream = await client.PostAsJsonAsync("/v1/assistant/chat/stream", new { message = projectQuestion });
         Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
         Assert.StartsWith("text/event-stream", stream.Content.Headers.ContentType?.ToString());
         var sse = await stream.Content.ReadAsStringAsync();
         Assert.Contains("event: status", sse);
-        Assert.Contains("\"groundingStatus\":\"not_documented\"", sse);
-        Assert.DoesNotContain("event: citation", sse);
+        Assert.Contains("\"groundingStatus\":\"grounded\"", sse);
+        Assert.Contains("event: citation", sse);
+        Assert.Contains("claim-vextis-01", sse);
         Assert.Contains("event: done", sse);
     }
 
@@ -464,9 +466,9 @@ public sealed class ProfileEvidenceAssistantTests
             File.Copy(
                 Path.Combine(repoEvidenceDir, "schema.json"),
                 Path.Combine(tempEvidenceDir, "schema.json"));
-            File.Copy(
-                Path.Combine(repoEvidenceDir, "projects", "vextis.md"),
-                Path.Combine(tempEvidenceDir, "projects", "vextis.md"));
+            File.WriteAllText(
+                Path.Combine(tempEvidenceDir, "projects", "vextis.md"),
+                "# Vextis\n\n## Status\n\nProject evidence remains pending.\n");
 
             File.WriteAllText(
                 Path.Combine(tempEvidenceDir, "profile.md"),

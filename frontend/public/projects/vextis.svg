@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420">
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0v32" fill="none" stroke="#343832"/>
+    </pattern>
+  </defs>
+  <path fill="#181d19" d="M0 0h960v420H0z"/>
+  <path fill="url(#grid)" d="M0 0h960v420H0z"/>
+  <g font-family="monospace">
+    <text x="52" y="61" fill="#c7ff36" font-size="18" letter-spacing="3">VEXTIS / ERP</text>
+    <text x="52" y="118" fill="#f1efe8" font-size="43" font-weight="bold">Order to cash</text>
+    <g fill="#202821" stroke="#768378">
+      <rect x="52" y="171" width="182" height="146"/>
+      <rect x="277" y="171" width="182" height="146"/>
+      <rect x="502" y="171" width="182" height="146" stroke="#c7ff36" stroke-width="2"/>
+      <rect x="727" y="171" width="182" height="146"/>
+    </g>
+    <g fill="none" stroke="#c7ff36" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M234 244h43m-28-7 8 7-8 7m210-7h43m-28-7 8 7-8 7m210-7h43m-28-7 8 7-8 7"/>
+      <path d="M124 206h27l11 11v35h-38zm27 0v12h11m-28 10h17m-17 9h17"/>
+      <path d="m368 205 24 12v25l-24 12-24-12v-25zm-24 12 24 12 24-12m-24 12v25"/>
+      <path d="M593 204l22 10v15c0 11-9 19-22 26-13-7-22-15-22-26v-15zm-9 24 6 6 12-13"/>
+      <path d="M803 204h30v50l-5-4-5 4-5-4-5 4-5-4-5 4zm8 14h14m-14 9h14m-14 9h10"/>
+    </g>
+    <g fill="#f1efe8" font-size="18" text-anchor="middle">
+      <text x="143" y="290">Order PDF</text>
+      <text x="368" y="290">Stock check</text>
+      <text x="593" y="290">Human approval</text>
+      <text x="818" y="290">Invoice</text>
+    </g>
+    <path d="M53 365h856" stroke="#768378"/>
+    <text x="52" y="394" fill="#b8c2b5" font-size="15" letter-spacing="2">GOVERNED AGENT WORKFLOW</text>
+  </g>
+</svg>

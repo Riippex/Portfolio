@@ -43,15 +43,18 @@ public sealed class EvidenceInventoryTests
     }
 
     [Fact]
-    public void Unverified_projects_remain_pending()
+    public void Project_case_studies_have_verified_claims_and_pinned_sources()
     {
         var inventory = LoadInventory();
         var projects = inventory.Items.Where(item => item.Kind == "project");
 
         Assert.All(projects, project =>
         {
-            Assert.Equal(EvidenceStatus.Pending, project.EvidenceStatus);
-            Assert.All(project.Claims, claim => Assert.Equal(EvidenceStatus.Pending, claim.Status));
+            Assert.Equal(EvidenceStatus.Verified, project.EvidenceStatus);
+            Assert.NotNull(project.SourceUrl);
+            Assert.Matches("^https://github[.]com/Riippex/[^/]+/tree/[a-f0-9]{40}$", project.SourceUrl);
+            Assert.NotEmpty(project.Claims);
+            Assert.All(project.Claims, claim => Assert.Equal(EvidenceStatus.Verified, claim.Status));
         });
     }
 

@@ -248,7 +248,7 @@ for (const [name, edit, prefix] of [
   ["a duplicate claim id", editJson((v) => { v.items[1].claims[0].claimId = v.items[0].claims[0].claimId; }), "evidence:item"],
   ["verified evidence without a source URL", editJson((v) => { const item = projectItem(v); item.evidenceStatus = "verified"; item.sourceUrl = null; }), "evidence:item"],
   ["verified evidence with a non-https source URL", editJson((v) => { const item = projectItem(v); item.evidenceStatus = "verified"; item.sourceUrl = "http://example.com/x"; }), "evidence:item"],
-  ["a verified claim inside a pending item", editJson((v) => { projectItem(v).claims[0].status = "verified"; }), "evidence:item"],
+  ["a verified claim inside a pending item", editJson((v) => { projectItem(v).evidenceStatus = "pending"; }), "evidence:item"],
   ["a citation without an anchor", editJson((v) => { projectItem(v).claims[0].citation = "docs/evidence/projects/x.md"; }), "evidence:item"],
   ["a document path that is not a tracked file", editJson((v) => { projectItem(v).documentPath = "docs/evidence/projects/nonexistent.md"; }), "evidence:item"],
   ["invalid JSON", () => "{ not json", "evidence:inventory.json or schema.json is not valid JSON"],

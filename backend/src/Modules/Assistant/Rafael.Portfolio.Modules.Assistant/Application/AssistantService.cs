@@ -188,9 +188,7 @@ public sealed class AssistantService : IAssistantService
 
     private List<AssistantEvidenceChunk> FindVerifiedChunks(AssistantChatRequest request)
     {
-        // Which subject the question names is decided over all evidence. The caller's slug filter
-        // only chooses the source of the answer, so it must not hide a named pending project and
-        // let a verified document stand in for it.
+        // Resolve named subjects across all evidence so a slug filter cannot hide them.
         var subjectChunks = request.Slug is null
             ? null
             : _evidenceAdapter.SearchEvidence(request.Message, limit: CandidateLimit, slugFilter: null);
@@ -200,13 +198,11 @@ public sealed class AssistantService : IAssistantService
             limit: CandidateLimit,
             slugFilter: request.Slug);
 
-        // A question that names a subject with no verified evidence is undocumented. Generic words
-        // it shares with other documents (for example "AI engineering") must not make unrelated
-        // verified evidence stand in for the named subject.
-        var namedSubjects = subjectChunks ?? candidateChunks;
+        var namedSubjects = (subjectChunks ?? candidateChunks)
+            .Where(chunk => NamesSubject(request.Message, chunk))
+            .ToList();
         if (namedSubjects.Any(chunk =>
                 !IsVerified(chunk) &&
-                NamesSubject(request.Message, chunk) &&
                 !namedSubjects.Any(other => IsVerified(other) && string.Equals(other.Slug, chunk.Slug, StringComparison.Ordinal))))
         {
             return [];
@@ -214,6 +210,8 @@ public sealed class AssistantService : IAssistantService
 
         var verifiedChunks = candidateChunks
             .Where(chunk => chunk.Score > 0 && IsVerified(chunk))
+            .Where(chunk => namedSubjects.Count == 0 ||
+                namedSubjects.Any(subject => string.Equals(subject.Slug, chunk.Slug, StringComparison.Ordinal)))
             .ToList();
 
         var paddedQuery = $" {NormalizeWords(request.Message)} ";

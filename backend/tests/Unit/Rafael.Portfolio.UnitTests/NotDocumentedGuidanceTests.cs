@@ -133,7 +133,7 @@ public sealed class NotDocumentedGuidanceTests
 
     [Theory]
     [InlineData("Tell me about quantum baking recipes")] // nothing in the real manifest matches
-    [InlineData("Tell me about Vextis AI engineering")] // a pending project in the real manifest
+    [InlineData("How do I build a telescope mirror?")]
     public async Task The_real_host_gives_the_same_neutral_guidance_over_service_http_chat_and_sse(string message)
     {
         await using var host = CreateHost();

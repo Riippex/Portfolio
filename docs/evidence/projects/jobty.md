@@ -3,28 +3,31 @@
 - Identifier: `evidence-project-jobty`
 - Slug: `jobty`
 - Kind: Project
-- Status: `pending`
-- Version: `2026.09`
-- Last reviewed: 2026-09-28
-- Public Source: Pending owner publication
-
-## Status notice
-
-> [!NOTE]
-> Public evidence connection is currently pending. Architecture summaries and case
-> studies will be verified and published once authorized public artifacts are linked.
+- Status: `verified`
+- Version: `2026.11.1`
+- Last reviewed: 2026-11-05
+- Canonical Source: https://github.com/Riippex/JobTY/tree/bd85d00826944bebb10dfbe95a702a08d8e84bb1
 
 ## Matching engine
 
-JobTY is a grounded AI job-matching engine characterized by:
+JobTY uses an LLM to evaluate a vacancy against a parsed candidate profile and returns a structured fit score, reasons, concerns, and a recommendation.
 
-- Deterministic extraction of role requirements and candidate evidence.
-- Explicit classification of claims into direct evidence, supported inferences, and concrete gaps.
-- Refusal to generate unsupported precision scores without verifiable backing.
-- Ephemeral processing where vacancies and evaluation results are not retained past the user session.
+The scorer uses the job description and saved candidate profile as inputs, validates the response shape, and can reuse a score stored for the profile and job. The score expresses the model's assessment.
 
-## Claims index
+[Job scoring implementation](https://github.com/Riippex/JobTY/blob/bd85d00826944bebb10dfbe95a702a08d8e84bb1/back/app/services/job_scorer.py)
 
-| Claim ID | Statement | Status | Citation |
-|---|---|---|---|
-| `claim-jobty-01` | AI vacancy evaluation engine that identifies explicit skill evidence, inferences, and gaps. | `pending` | Matching engine synopsis |
+## PDF parsing
+
+The backend extracts text from a PDF résumé and passes it to a configured LLM to produce a structured candidate profile.
+
+The parser reads PDF pages with pdfplumber and uses a typed result for the extracted candidate data.
+
+[PDF parsing implementation](https://github.com/Riippex/JobTY/blob/bd85d00826944bebb10dfbe95a702a08d8e84bb1/back/app/services/cv_parser.py)
+
+## Application architecture
+
+The development snapshot defines a Next.js frontend and a FastAPI backend in Docker Compose, with SQLite configured as the default database.
+
+The service definitions show the local application layout and the configuration boundary for the backend's model provider.
+
+[Docker Compose service definitions](https://github.com/Riippex/JobTY/blob/bd85d00826944bebb10dfbe95a702a08d8e84bb1/docker-compose.yml)

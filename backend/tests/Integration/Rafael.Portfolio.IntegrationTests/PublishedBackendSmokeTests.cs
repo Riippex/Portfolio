@@ -52,13 +52,13 @@ public sealed partial class PublishedBackendSmokeTests
             var summaries = projectsJson.RootElement.EnumerateArray().ToArray();
             Assert.Equal(3, summaries.Length);
             Assert.All(summaries, summary =>
-                Assert.Equal("pending", summary.GetProperty("evidenceStatus").GetString()));
+                Assert.Equal("verified", summary.GetProperty("evidenceStatus").GetString()));
 
             using var detail = await http.GetAsync(new Uri("/v1/projects/vextis", UriKind.Relative));
             Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
             using var detailJson = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
             Assert.Equal("vextis", detailJson.RootElement.GetProperty("slug").GetString());
-            Assert.Equal("pending", detailJson.RootElement.GetProperty("evidenceStatus").GetString());
+            Assert.Equal("verified", detailJson.RootElement.GetProperty("evidenceStatus").GetString());
 
             using var unknown = await http.GetAsync(new Uri("/v1/projects/unknown-project", UriKind.Relative));
             Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
@@ -93,14 +93,9 @@ public sealed partial class PublishedBackendSmokeTests
                 Assert.Equal("public", doc.GetProperty("visibility").GetString());
                 Assert.True(doc.GetProperty("sections").GetArrayLength() > 0);
             });
-            var statuses = evidenceItems
-                .GroupBy(doc => doc.GetProperty("item").GetProperty("evidenceStatus").GetString())
-                .ToDictionary(group => group.Key!, group => group.Count());
-            Assert.Equal(1, statuses["verified"]);
-            Assert.Equal(3, statuses["pending"]);
             Assert.All(
-                evidenceItems.Where(doc => doc.GetProperty("item").GetProperty("kind").GetString() == "project"),
-                doc => Assert.Equal("pending", doc.GetProperty("item").GetProperty("evidenceStatus").GetString()));
+                evidenceItems,
+                doc => Assert.Equal("verified", doc.GetProperty("item").GetProperty("evidenceStatus").GetString()));
 
             using var profileEvidence = await http.GetAsync(new Uri("/v1/evidence/profile", UriKind.Relative));
             Assert.Equal(HttpStatusCode.OK, profileEvidence.StatusCode);
@@ -121,7 +116,7 @@ public sealed partial class PublishedBackendSmokeTests
             using var vextisEvidenceJson = JsonDocument.Parse(await vextisEvidence.Content.ReadAsStringAsync());
             Assert.Equal("public", vextisEvidenceJson.RootElement.GetProperty("visibility").GetString());
             Assert.Equal("vextis", vextisEvidenceJson.RootElement.GetProperty("item").GetProperty("slug").GetString());
-            Assert.Equal("pending", vextisEvidenceJson.RootElement.GetProperty("item").GetProperty("evidenceStatus").GetString());
+            Assert.Equal("verified", vextisEvidenceJson.RootElement.GetProperty("item").GetProperty("evidenceStatus").GetString());
 
             using var unknownEvidence = await http.GetAsync(new Uri("/v1/evidence/unknown-evidence", UriKind.Relative));
             Assert.Equal(HttpStatusCode.NotFound, unknownEvidence.StatusCode);
@@ -219,17 +214,17 @@ public sealed partial class PublishedBackendSmokeTests
                 Assert.Equal(HttpStatusCode.Forbidden, wrongStageResponse.StatusCode);
             }
 
-            using var chatPendingEvidence = await http.PostAsync(
+            using var chatProjectEvidence = await http.PostAsync(
                 new Uri("/v1/assistant/chat", UriKind.Relative),
                 new StringContent(
-                    JsonSerializer.Serialize(new { message = "Tell me about autonomous agents" }),
+                    JsonSerializer.Serialize(new { message = "Explain the Vextis Spring Boot architecture" }),
                     Encoding.UTF8,
                     "application/json"));
-            Assert.Equal(HttpStatusCode.OK, chatPendingEvidence.StatusCode);
-            using var chatPendingJson = JsonDocument.Parse(await chatPendingEvidence.Content.ReadAsStringAsync());
-            Assert.Equal("not_documented", chatPendingJson.RootElement.GetProperty("groundingStatus").GetString());
-            Assert.NotEmpty(chatPendingJson.RootElement.GetProperty("answer").GetString()!);
-            Assert.Empty(chatPendingJson.RootElement.GetProperty("citations").EnumerateArray().ToArray());
+            Assert.Equal(HttpStatusCode.OK, chatProjectEvidence.StatusCode);
+            using var chatProjectJson = JsonDocument.Parse(await chatProjectEvidence.Content.ReadAsStringAsync());
+            Assert.Equal("grounded", chatProjectJson.RootElement.GetProperty("groundingStatus").GetString());
+            Assert.NotEmpty(chatProjectJson.RootElement.GetProperty("answer").GetString()!);
+            Assert.NotEmpty(chatProjectJson.RootElement.GetProperty("citations").EnumerateArray().ToArray());
 
             using var chatUndocumented = await http.PostAsync(
                 new Uri("/v1/assistant/chat", UriKind.Relative),
@@ -288,7 +283,7 @@ public sealed partial class PublishedBackendSmokeTests
             // Each signed visitor has an isolated bucket of 5, so the remaining answers use
             // separate visitors and stay inside the existing finite limit.
             run.Stage = "development assistant evidence answers";
-            var undocumentedStream = await SignedPostAsync("/v1/assistant/chat/stream", "203.0.113.20", "Tell me about autonomous agents");
+            var undocumentedStream = await SignedPostAsync("/v1/assistant/chat/stream", "203.0.113.20", "Quantum baking recipes with pineapple");
             Assert.Equal(HttpStatusCode.OK, undocumentedStream.Status);
             Assert.Contains("event: status", undocumentedStream.Body);
             Assert.Contains("event: token", undocumentedStream.Body);
@@ -334,20 +329,23 @@ public sealed partial class PublishedBackendSmokeTests
             Assert.Contains("claim-profile-05", expinnStream.Body);
             Assert.DoesNotContain("claim-profile-02", expinnStream.Body);
 
-            // A named pending project is undocumented even when the question shares generic words
-            // (here "AI engineering") with the verified profile.
-            var vextis = await SignedPostAsync("/v1/assistant/chat", "203.0.113.24", "Tell me about Vextis AI engineering");
+            const string projectQuestion = "Explain the Vextis Spring Boot architecture";
+            var vextis = await SignedPostAsync("/v1/assistant/chat", "203.0.113.24", projectQuestion);
             Assert.Equal(HttpStatusCode.OK, vextis.Status);
             using (var vextisJson = JsonDocument.Parse(vextis.Body))
             {
-                Assert.Equal("not_documented", vextisJson.RootElement.GetProperty("groundingStatus").GetString());
-                Assert.Empty(vextisJson.RootElement.GetProperty("citations").EnumerateArray().ToArray());
+                Assert.Equal("grounded", vextisJson.RootElement.GetProperty("groundingStatus").GetString());
+                var citations = vextisJson.RootElement.GetProperty("citations").EnumerateArray().ToArray();
+                Assert.Contains(citations, citation => citation.GetProperty("claims").EnumerateArray()
+                    .Any(claim => claim.GetString() == "claim-vextis-01"));
+                Assert.All(citations, citation => Assert.Equal("evidence-project-vextis", citation.GetProperty("documentId").GetString()));
             }
 
-            var vextisStream = await SignedPostAsync("/v1/assistant/chat/stream", "203.0.113.25", "Tell me about Vextis AI engineering");
+            var vextisStream = await SignedPostAsync("/v1/assistant/chat/stream", "203.0.113.25", projectQuestion);
             Assert.Equal(HttpStatusCode.OK, vextisStream.Status);
-            Assert.Contains("not_documented", vextisStream.Body);
-            Assert.DoesNotContain("event: citation", vextisStream.Body);
+            Assert.Contains("grounded", vextisStream.Body);
+            Assert.Contains("event: citation", vextisStream.Body);
+            Assert.Contains("claim-vextis-01", vextisStream.Body);
 
             // The signed proxy boundary gives each visitor an isolated 5-request
             // budget across the frontend-to-backend path.
@@ -386,7 +384,7 @@ public sealed partial class PublishedBackendSmokeTests
             }
 
             using (var jobValid = JobRequest(
-                "Senior AI Engineer\n- Autonomous Agents architecture\n- Mainframe COBOL legacy ops",
+                "Senior AI Engineer\n- Spring Boot\n- Five years of Spring Boot\n- Mainframe COBOL legacy ops",
                 jobsIdentity.Identity,
                 jobsIdentity.Proof))
             using (var jobValidResponse = await http.SendAsync(jobValid))
@@ -396,9 +394,10 @@ public sealed partial class PublishedBackendSmokeTests
                 Assert.True(jobJson.RootElement.GetProperty("extractedRequirements").GetArrayLength() > 0);
                 Assert.True(jobJson.RootElement.GetProperty("gaps").GetArrayLength() > 0);
 
-                // All published evidence is still pending, so nothing may be a
-                // direct match, and every inference carries a real, inspectable target.
-                Assert.Equal(0, jobJson.RootElement.GetProperty("directMatches").GetArrayLength());
+                // Project evidence supports the technology without establishing years of experience.
+                var directMatches = jobJson.RootElement.GetProperty("directMatches").EnumerateArray().ToArray();
+                var direct = Assert.Single(directMatches);
+                Assert.Equal("claim-vextis-01", direct.GetProperty("claimId").GetString());
                 var inferences = jobJson.RootElement.GetProperty("inferences").EnumerateArray().ToArray();
                 Assert.NotEmpty(inferences);
                 Assert.All(inferences, inference =>

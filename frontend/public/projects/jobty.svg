@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420">
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0v32" fill="none" stroke="#443a2e"/>
+    </pattern>
+  </defs>
+  <path fill="#271f1a" d="M0 0h960v420H0z"/>
+  <path fill="url(#grid)" d="M0 0h960v420H0z"/>
+  <g font-family="monospace">
+    <text x="52" y="61" fill="#ffd48d" font-size="18" letter-spacing="3">JOBTY / JOB SEARCH</text>
+    <text x="52" y="118" fill="#f1efe8" font-size="43" font-weight="bold">Evaluating a vacancy</text>
+    <g fill="#332820" stroke="#9d866b">
+      <rect x="52" y="164" width="265" height="79"/>
+      <rect x="52" y="263" width="265" height="79"/>
+      <rect x="514" y="164" width="394" height="178" stroke="#ffd48d" stroke-width="2"/>
+    </g>
+    <g fill="none" stroke="#ffd48d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M317 203h82v100h-82m82-50h115m-31-8 8 8-8 8"/>
+      <path d="M77 188h21l8 8v23H77zm21 0v8h8m-22 7h15m-15 7h15"/>
+      <rect x="75" y="293" width="33" height="24" rx="2"/>
+      <path d="M84 293v-6h15v6m-24 9h33"/>
+      <path d="M538 211h346m-346 42h346m-346 42h346" stroke="#9d866b"/>
+    </g>
+    <g fill="#f1efe8" font-size="18">
+      <text x="127" y="210">Résumé PDF</text>
+      <text x="127" y="309">Job description</text>
+      <text x="544" y="197">Fit score</text>
+      <text x="544" y="239">Reasons</text>
+      <text x="544" y="281">Concerns</text>
+      <text x="544" y="323">Recommendation</text>
+    </g>
+    <text x="52" y="394" fill="#d4bd9d" font-size="15" letter-spacing="2">STRUCTURED MODEL ASSESSMENT</text>
+  </g>
+</svg>

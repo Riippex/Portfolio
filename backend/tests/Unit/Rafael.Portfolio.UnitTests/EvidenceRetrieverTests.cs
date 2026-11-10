@@ -27,7 +27,7 @@ public sealed class EvidenceRetrieverTests
     public void Retrieve_ranks_vextis_architecture_first_for_autonomous_agents_query()
     {
         var retriever = CreateRetriever();
-        var results = retriever.Retrieve("vextis autonomous agents architecture");
+        var results = retriever.Retrieve("vextis spring boot architecture");
 
         Assert.NotEmpty(results);
         var top = results[0];
@@ -35,8 +35,8 @@ public sealed class EvidenceRetrieverTests
         Assert.Equal("vextis", top.Slug);
         Assert.Equal("architecture", top.SectionSlug);
         Assert.Equal(EvidenceVisibility.Public, top.Visibility);
-        Assert.Equal("2026.09", top.Version);
-        Assert.Equal(EvidenceStatus.Pending, top.EvidenceStatus);
+        Assert.Equal("2026.11.1", top.Version);
+        Assert.Equal(EvidenceStatus.Verified, top.EvidenceStatus);
         Assert.True(top.Score > 0);
         Assert.Contains(top.Claims, c => c.ClaimId == "claim-vextis-01");
         Assert.Contains("docs/evidence/projects/vextis.md#architecture", top.Citations);
@@ -46,7 +46,7 @@ public sealed class EvidenceRetrieverTests
     public void Retrieve_ranks_kinetiq_pipeline_first_for_computer_vision_stream_query()
     {
         var retriever = CreateRetriever();
-        var results = retriever.Retrieve("real-time computer vision stream processing");
+        var results = retriever.Retrieve("opencv computer vision pipeline");
 
         Assert.NotEmpty(results);
         var top = results[0];
@@ -62,7 +62,7 @@ public sealed class EvidenceRetrieverTests
     public void Retrieve_ranks_jobty_matching_engine_first_for_vacancy_evaluation_query()
     {
         var retriever = CreateRetriever();
-        var results = retriever.Retrieve("job vacancy evaluation engine skills gaps");
+        var results = retriever.Retrieve("jobty vacancy evaluation fit score");
 
         Assert.NotEmpty(results);
         var top = results[0];

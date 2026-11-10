@@ -1,6 +1,8 @@
 import { getProjectBySlug } from "@/modules/portfolio/api";
+import { getProjectPresentation } from "@/modules/portfolio/project-presentation";
 import { BrandMark } from "@/shared/brand/brand-mark";
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -45,6 +47,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
   }
 
   const project = result.data;
+  const presentation = getProjectPresentation(project.slug);
 
   return (
     <main>
@@ -80,6 +83,32 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
 
         <p className="hero-copy">{project.summary}</p>
 
+        {presentation && (
+          <>
+            <ul className="profile-links" aria-label="Project links">
+              {presentation.website && (
+                <li className="project-website">
+                  <a className="profile-link" href={presentation.website.url} target="_blank" rel="noreferrer">
+                    {presentation.website.label} <span aria-hidden="true">↗</span>
+                  </a>
+                  {presentation.website.note && <small>{presentation.website.note}</small>}
+                </li>
+              )}
+              {presentation.repositories.map(({ label, url }) => (
+                <li key={url}>
+                  <a className="profile-link" href={url} target="_blank" rel="noreferrer">
+                    {label} <span aria-hidden="true">↗</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <figure className="project-detail-cover">
+              <Image src={presentation.cover} width={960} height={420} alt={presentation.coverAlt} unoptimized />
+              <figcaption>Workflow illustration</figcaption>
+            </figure>
+          </>
+        )}
+
         <div className="detail-meta-grid" aria-label="Project metadata">
           <div className="meta-card">
             <span className="meta-label">Evidence status</span>
@@ -98,7 +127,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
                 rel="noreferrer"
                 className="source-link"
               >
-                Inspect repository ↗
+                Evidence snapshot ↗
               </a>
             ) : (
               <span className="pending-badge">Pending owner verification</span>

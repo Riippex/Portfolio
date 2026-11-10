@@ -67,11 +67,11 @@ public sealed class PortfolioCatalogTests
     }
 
     [Fact]
-    public void Projects_are_marked_pending_until_evidence_is_connected()
+    public void Project_summaries_expose_the_verified_evidence_status()
     {
         var catalog = CreateCatalog();
 
-        Assert.All(catalog.GetProjects(), project => Assert.Equal("pending", project.EvidenceStatus));
+        Assert.All(catalog.GetProjects(), project => Assert.Equal("verified", project.EvidenceStatus));
     }
 
     [Fact]
@@ -97,9 +97,10 @@ public sealed class PortfolioCatalogTests
 
         Assert.NotNull(project);
         Assert.Equal(slug, project.Slug);
-        Assert.Equal("pending", project.EvidenceStatus);
+        Assert.Equal("verified", project.EvidenceStatus);
+        Assert.NotNull(project.SourceUrl);
         Assert.NotEmpty(project.Claims);
-        Assert.All(project.Claims, claim => Assert.Equal("pending", claim.Status));
+        Assert.All(project.Claims, claim => Assert.Equal("verified", claim.Status));
     }
 
     [Fact]

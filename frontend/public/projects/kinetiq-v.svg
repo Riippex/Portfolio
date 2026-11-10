@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420">
+  <defs>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0v32" fill="none" stroke="#344043"/>
+    </pattern>
+  </defs>
+  <path fill="#172226" d="M0 0h960v420H0z"/>
+  <path fill="url(#grid)" d="M0 0h960v420H0z"/>
+  <g font-family="monospace">
+    <text x="52" y="61" fill="#a7efe4" font-size="18" letter-spacing="3">KINETIQ V / COMPUTER VISION</text>
+    <text x="52" y="118" fill="#f1efe8" font-size="43" font-weight="bold">Tracking movement</text>
+    <g fill="#203034" stroke="#708985">
+      <rect x="52" y="157" width="416" height="211"/>
+      <rect x="492" y="157" width="416" height="211"/>
+    </g>
+    <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M78 207v-24h24m316 0h24v24M78 318v24h24m316 0h24v-24" stroke="#708985" stroke-width="2"/>
+      <rect x="195" y="180" width="151" height="163" stroke="#a7efe4" stroke-dasharray="6 6"/>
+      <path d="M236 313l-4-33 32-28 19-37m-19 37 24 31 25 26m-30-94-35 12-25 23m60-35 23 16 21-6" stroke="#a7efe4" stroke-width="4"/>
+      <circle cx="295" cy="200" r="11" stroke="#a7efe4" stroke-width="3"/>
+      <path d="M530 205v106h338m-338-26h338m-338-27h338m-338-27h338" stroke="#56706d"/>
+      <path d="M535 287c28 0 45-41 78-44s47 37 75 35 44-60 79-61 54 52 94 48" stroke="#a7efe4" stroke-width="4"/>
+    </g>
+    <g fill="#a7efe4">
+      <circle cx="236" cy="313" r="5"/><circle cx="232" cy="280" r="5"/>
+      <circle cx="264" cy="252" r="5"/><circle cx="283" cy="215" r="5"/>
+      <circle cx="248" cy="227" r="5"/><circle cx="223" cy="250" r="5"/>
+      <circle cx="306" cy="231" r="5"/><circle cx="327" cy="225" r="5"/>
+      <circle cx="288" cy="283" r="5"/><circle cx="313" cy="309" r="5"/>
+    </g>
+    <g fill="#b9d5cf" font-size="15" letter-spacing="2">
+      <text x="52" y="396">SELECTED TARGET</text>
+      <text x="492" y="396">MOVEMENT OVER TIME</text>
+    </g>
+  </g>
+</svg>
